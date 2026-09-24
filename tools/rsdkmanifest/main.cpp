@@ -18,6 +18,7 @@
  * Usage: rsdkmanifest <root containing Data/> <out dir>
  */
 #include <set>
+#include <vector>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -110,11 +111,48 @@ static int loadStageScripts() {
     return scriptID + stageObjects;
 }
 
+// The act's placed entities (upstream LoadActLayout's object list, from slot 32): startup subs look
+// for them (the Player Object loads Sonic.Ani only if a type-1 entity is placed).
+static int loadActEntities(const char *folder, const char *id) {
+    for (int i = 0; i < ENTITY_COUNT; ++i) memset(&objectEntityList[i], 0, sizeof(objectEntityList[i]));
+    char path[0x100];
+    snprintf(path, sizeof(path), "Data/Stages/%s/Act%s.bin", folder, id);
+    FileInfo info;
+    if (!LoadFile(path, &info))
+        return 0;
+    readStr();                // title card text
+    byte skip[7];
+    FileRead(skip, 7);        // activeTileLayers[4], midpoint, xsize, ysize
+    int xs = skip[5], ys = skip[6];
+    for (int i = 0; i < xs * ys * 2; ++i) FileRead(skip, 1);
+    byte n = 0;
+    FileRead(&n, 1);
+    for (int i = 0; i < n; ++i) readStr(); // type names
+    byte c[2];
+    FileRead(c, 2);
+    int count = (c[0] << 8) | c[1];
+    Entity *e = &objectEntityList[32];
+    for (int i = 0; i < count && 32 + i < ENTITY_COUNT; ++i, ++e) {
+        byte o[6];
+        FileRead(o, 6);
+        e->type          = o[0];
+        e->propertyValue = o[1];
+        e->XPos          = ((o[2] << 8) | o[3]) << 16;
+        e->YPos          = ((o[4] << 8) | o[5]) << 16;
+    }
+    CloseFile();
+    return count;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: rsdkmanifest <root containing Data/> <out dir>\n");
+    if (argc < 3) {
+        fprintf(stderr, "usage: rsdkmanifest <root containing Data/> <out dir> [player list positions, default 0]\n");
         return 1;
     }
+    std::vector<int> players;
+    for (int a = 3; a < argc; ++a) players.push_back(atoi(argv[a]));
+    if (players.empty())
+        players.push_back(0); // Sonic (1 = Tails)
     std::string out = argv[2];
     char cwd[0x400];
     if (out[0] != '/' && getcwd(cwd, sizeof(cwd)))
@@ -138,8 +176,11 @@ int main(int argc, char **argv) {
         for (int pos = 0; pos < stageListCount[list]; ++pos) {
             activeStageList   = list;
             stageListPosition = pos;
+          for (int player : players) { // one pass per selectable player (union of their frames)
+            playerListPos     = player;
             uint32_t overflow = g_ps1ScriptOverflow;
             int objects       = loadStageScripts();
+            loadActEntities(stageList[list][pos].folder, stageList[list][pos].id);
             if (g_ps1ScriptOverflow != overflow) { // LoadBytecode refused a file: PS1 arrays too small
                 fprintf(stderr, "ERROR %s: bytecode does not fit SCRIPTDATA_COUNT/JUMPTABLE_COUNT (code %d ints)\n",
                         stageList[list][pos].folder, scriptCodePos);
@@ -176,8 +217,9 @@ int main(int argc, char **argv) {
                 }
             }
             fclose(f);
-            printf("%-5s %-8s %3d objects %4d frames\n", list == 0 ? "pres" : list == 1 ? "reg" : list == 2 ? "bonus" : "spec",
-                   stageList[list][pos].folder, objects - 1, frames);
+            printf("%-5s %-8s p%d %3d objects %4d frames\n", list == 0 ? "pres" : list == 1 ? "reg" : list == 2 ? "bonus" : "spec",
+                   stageList[list][pos].folder, player, objects - 1, frames);
+          }
             ++stages;
         }
     }

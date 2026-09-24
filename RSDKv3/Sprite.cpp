@@ -1,5 +1,9 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_PS1
+extern volatile uint32_t g_ps1SurfaceGen; // ps1/render.cpp
+#endif
+
 struct GifDecoder {
     int depth;
     int clearCode;
@@ -226,6 +230,7 @@ int AddGraphicsFile(const char *filePath)
     // PS1: sprite pixels live only in VRAM (the per-stage atlas, tools/atlas; bound in phase 3).
     // Register the name; never decode an image at runtime (golden rule).
     StrCopy(gfxSurface[sheetID].fileName, sheetPath);
+    g_ps1SurfaceGen = g_ps1SurfaceGen + 1; // ps1/render.cpp re-binds sheets to the atlas
     return sheetID;
 #endif
     byte fileExtension = (byte)sheetPath[(StrLength(sheetPath) - 1) & 0xFF];
@@ -247,6 +252,7 @@ void RemoveGraphicsFile(const char *filePath, int sheetID)
     for (int s = 0; s < SURFACE_COUNT; ++s)
         if (s == sheetID || (sheetID < 0 && StrComp(gfxSurface[s].fileName, filePath)))
             gfxSurface[s].fileName[0] = 0;
+    g_ps1SurfaceGen = g_ps1SurfaceGen + 1;
     return;
 #endif
     if (sheetID < 0) {

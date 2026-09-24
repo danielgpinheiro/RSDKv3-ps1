@@ -52,7 +52,8 @@ def main():
 
     cxx = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('g++') or 'c++'
     run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + cxx])
-    run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, manifest], stdout=subprocess.DEVNULL)
+    # Player list position 0 = Sonic (the act's placed Player Object loads Sonic.Ani; Tails: see docs/28)
+    run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, manifest, '0'], stdout=subprocess.DEVNULL)
 
     r = run('3 atlas', [PY, os.path.join(HERE, 'atlas', 'build_atlas.py'), data, manifest],
             check=False, capture_output=True, text=True)

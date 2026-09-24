@@ -17,5 +17,9 @@
 // upstream LoadStageGIFFile). Returns false if the file is missing or short.
 bool PS1TileSetLoad(const char *folder, uint8_t *pal768);
 
+// Bit t set = tile t has at least one non-transparent texel (filled by PS1TileSetLoad from the pages
+// it streams; the renderer skips empty tiles, as PC's per-pixel `> 0` test draws nothing for them).
+extern uint8_t g_ps1TileSolid[1024 / 8];
+
 extern volatile uint32_t g_ps1TileSetLoads; // tile sets loaded (GDB)
 extern volatile uint32_t g_ps1TileSetBytes; // texel bytes uploaded by the last load

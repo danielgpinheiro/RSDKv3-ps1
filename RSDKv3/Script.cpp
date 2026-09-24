@@ -2,6 +2,7 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/video.hh"
+void PS1TileChanged(int chunkTile); // ps1/render.cpp
 
 // Scene3D buffers are PS1-sized (Scene3D.hpp): clamp script indices / counts, track the largest
 // seen and count overflows (for GDB; phase 7 sizes them for good).
@@ -4107,6 +4108,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     case TILEINFO_ANGLEA: collisionMasks[1].angles[tiles128x128.tileIndex[scriptEng.operands[6]]] = scriptEng.operands[0]; break;
                     default: break;
                 }
+#if RETRO_PLATFORM == RETRO_PS1
+                PS1TileChanged(scriptEng.operands[6]); // ps1/render.cpp: the tile layers' packed visuals
+#endif
                 break;
             }
             case FUNC_GETANIMATIONBYNAME: {

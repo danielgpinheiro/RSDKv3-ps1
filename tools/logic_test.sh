@@ -25,7 +25,7 @@ end
 break PS1PerfTick if g_ps1PerfFrames == 1 || g_ps1PerfFrames == $S0 || g_ps1PerfFrames == $S1 || g_ps1PerfFrames == $S2 || g_ps1PerfFrames == $S3
 commands
 silent
-printf "F%u mask=%02x P0 x=%d y=%d xv=%d yv=%d speed=%d gravity=%d | time %d:%02d.%02d enabled=%d stageMode=%d | lastHbl=%u maxHbl=%u vsyncs=%u\n  ctrl mode=%d lock=%d in L%dR%dU%dD%d jP%d jH%d keyDown R%d A%d | entity %d type %d\n", g_ps1PerfFrames, g_ps1PadButtons, playerList[0].XPos >> 16, playerList[0].YPos >> 16, playerList[0].XVelocity, playerList[0].YVelocity, playerList[0].speed, playerList[0].gravity, stageMinutes, stageSeconds, stageMilliseconds, timeEnabled, stageMode, g_ps1PerfLastHbl, g_ps1PerfMaxHbl, g_ps1PerfVsyncs, playerList[0].controlMode, playerList[0].controlLock, playerList[0].left, playerList[0].right, playerList[0].up, playerList[0].down, playerList[0].jumpPress, playerList[0].jumpHold, keyDown.right, keyDown.A, playerList[0].entityNo, objectEntityList[playerList[0].entityNo].type
+printf "F%u mask=%02x P0 x=%d y=%d xv=%d yv=%d speed=%d gravity=%d | time %d:%02d.%02d enabled=%d stageMode=%d | lastHbl=%u maxHbl=%u vsyncs=%u\n  prof objects=%u drawSubs=%u layers=%u layerPrims=%u sprites=%u chainWords=%u\n  ctrl mode=%d lock=%d in L%dR%dU%dD%d jP%d jH%d keyDown R%d A%d | entity %d type %d\n", g_ps1PerfFrames, g_ps1PadButtons, playerList[0].XPos >> 16, playerList[0].YPos >> 16, playerList[0].XVelocity, playerList[0].YVelocity, playerList[0].speed, playerList[0].gravity, stageMinutes, stageSeconds, stageMilliseconds, timeEnabled, stageMode, g_ps1PerfLastHbl, g_ps1PerfMaxHbl, g_ps1PerfVsyncs, g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl, g_ps1LayerHbl, g_ps1LayerPrims, g_ps1DrawSprites, g_ps1ChainLastWords, playerList[0].controlMode, playerList[0].controlLock, playerList[0].left, playerList[0].right, playerList[0].up, playerList[0].down, playerList[0].jumpPress, playerList[0].jumpHold, keyDown.right, keyDown.A, playerList[0].entityNo, objectEntityList[playerList[0].entityNo].type
 if g_ps1PerfFrames == $S0
   dump binary memory ${OUT}_ents.bin &objectEntityList[0] &objectEntityList[0x4A0]
   set var g_ps1PadTestMask = 0x08
@@ -50,7 +50,7 @@ pkill -f PCSX-Redux 2>/dev/null; sleep 1
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv3.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|PROF|  ctrl) .*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|PROF|  ctrl|  prof) .*" | tee "$OUT.txt"
 pkill -f PCSX-Redux
 [ -f "${OUT}_ents.bin" ] && python3 - "${OUT}_ents.bin" <<'PYEOF'
 import sys, collections

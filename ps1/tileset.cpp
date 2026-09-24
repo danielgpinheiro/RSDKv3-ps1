@@ -13,6 +13,7 @@
 
 extern psyqo::GPU *g_ps1GPU;
 
+uint8_t g_ps1TileSolid[1024 / 8];
 volatile uint32_t g_ps1TileSetLoads = 0;
 volatile uint32_t g_ps1TileSetBytes = 0;
 
@@ -33,6 +34,7 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
     ok = ok && fread(pal768, 1, 768, f) == 768;
     uint16_t *staging = ok ? (uint16_t *)psyqo_malloc(STAGING_LINES * PAGE_HW * 2) : nullptr;
     uint32_t bytes    = 0;
+    for (int i = 0; i < 1024 / 8; ++i) g_ps1TileSolid[i] = 0;
     if (staging) {
         PS1GpuImmediate(); // the previous frame's chain may still be texturing from VRAM
         for (int p = 0; ok && p < PAGES; ++p) {
@@ -41,6 +43,20 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
             for (int line = 0; ok && line < 256; line += STAGING_LINES) {
                 size_t sz = STAGING_LINES * PAGE_HW * 2;
                 ok = fread(staging, 1, sz, f) == sz;
+                if (ok) { // mark the tiles of these 4 tile rows that have a non-zero texel
+                    const uint8_t *px = (const uint8_t *)staging;
+                    for (int tr = 0; tr < STAGING_LINES / 16; ++tr)
+                        for (int tc = 0; tc < 16; ++tc) {
+                            int t      = p * 256 + ((line >> 4) + tr) * 16 + tc;
+                            bool solid = false;
+                            for (int r = 0; r < 16 && !solid; ++r) {
+                                const uint32_t *w = (const uint32_t *)&px[(tr * 16 + r) * 256 + tc * 16];
+                                solid             = (w[0] | w[1] | w[2] | w[3]) != 0;
+                            }
+                            if (solid)
+                                g_ps1TileSolid[t >> 3] |= (uint8_t)(1 << (t & 7));
+                        }
+                }
                 if (ok)
                     g_ps1GPU->uploadToVRAM(staging, psyqo::Rect{{x, (int16_t)(y + line)}, {PAGE_HW, STAGING_LINES}});
                 bytes += sz;
