@@ -3,7 +3,7 @@
 
 A MODE2/2352 BIN/CUE is needed for CD-XA music and STR files with XA audio (2336-byte mixed
 sectors, which an hdiutil ISO can't carry). The image boots through the BIOS too:
-SYSTEM.CNF (BOOT = cdrom:\\PSX.EXE;1) + PSX.EXE (the current rsdkv2.ps-exe) + the Sony
+SYSTEM.CNF (BOOT = cdrom:\\PSX.EXE;1) + PSX.EXE (the current rsdkv3.ps-exe) + the Sony
 license sectors, taken from the workspace's LICENSE.DAT (never copied into the repo; build/ is
 git-ignored).
 
@@ -11,10 +11,11 @@ Tree: every file under ISO_ROOT (build/iso: Data/**), macOS metadata skipped. `.
 `.str` files whose size is a whole number of 2336-byte sectors are `type="mixed"`; everything
 else is data (Form 1, read by ps1/cdrom_fs.cpp as 2048-byte sectors).
 
-Trim (phase 9): the PC source assets the pipeline already converted never go on the disc —
-SOURCE_ONLY extensions (.gif sheets/tiles -> atlas/.vram, .wav -> .vag, .ogg -> Music.xa,
-16x16Tiles.raw -> .vram, script .txt -> bytecode). On PS1, LoadGIFFile returns before opening
-anything and ParseScriptFile is compiled out. The build fails if tools/disc/load_order.txt (what
+Trim: the PC source assets the pipeline converts never go on the disc — SOURCE_ONLY extensions
+(.gif sheets/tiles -> atlas/.vram, .wav -> .vag, .ogg -> CD-XA). Per game: Sonic CD reads .txt
+files at runtime (help pages, credits) and ships scripts as bytecode, so .txt stays (Nexus
+excluded .txt and .raw). On PS1, LoadGIFFile returns before opening anything and the script
+compiler is compiled out (RETRO_USE_COMPILER 0). The build fails if tools/disc/load_order.txt (what
 the game opens) lists an excluded file. tools/disc/verify_disc.py checks the image afterwards.
 
 Layout (load-time phase): mkpsxiso gives files their LBAs in XML order across the whole tree (a
@@ -25,7 +26,7 @@ cdrom_fs's read-ahead windows usually already hold the next file the game opens.
 
 Usage: build_disc.py [ISO_ROOT] [EXE] [LICENSE|none] [OUT_PREFIX]
   LICENSE none = no license data (the disc boots in emulators, on ODEs and modded consoles only)
-  defaults: build/iso rsdkv2.ps-exe ../LICENSE.DAT build/game
+  defaults: build/iso rsdkv3.ps-exe ../LICENSE.DAT build/game
 """
 import os, subprocess, sys
 from xml.sax.saxutils import quoteattr
@@ -46,7 +47,7 @@ def file_type(path):
 
 
 ORDER = os.path.join(HERE, 'load_order.txt')
-SOURCE_ONLY = ('.gif', '.wav', '.ogg', '.raw', '.txt')
+SOURCE_ONLY = ('.gif', '.wav', '.ogg')
 # Fixed timestamps (volume + every entry): the image depends only on its contents, so identical
 # inputs give a byte-identical disc (published SHA-256s can be checked).
 DISC_DATE = '20260924000000'
@@ -96,7 +97,7 @@ def emit_file(rel, iso_root, out, counts):
 def main():
     args = sys.argv[1:]
     iso_root = os.path.abspath(args[0] if len(args) > 0 else os.path.join(REPO, 'build', 'iso'))
-    exe = os.path.abspath(args[1] if len(args) > 1 else os.path.join(REPO, 'rsdkv2.ps-exe'))
+    exe = os.path.abspath(args[1] if len(args) > 1 else os.path.join(REPO, 'rsdkv3.ps-exe'))
     lic = args[2] if len(args) > 2 else os.path.join(REPO, '..', 'LICENSE.DAT')
     lic = None if lic.lower() == 'none' else os.path.abspath(lic)  # none: blank license sectors
     out = os.path.abspath(args[3] if len(args) > 3 else os.path.join(REPO, 'build', 'game'))
@@ -120,8 +121,8 @@ def main():
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<iso_project image_name=%s cue_sheet=%s>' % (quoteattr(out + '.bin'), quoteattr(out + '.cue')),
         '\t<track type="data">',
-        '\t\t<identifiers system="PLAYSTATION" application="PLAYSTATION" volume="RSDKV2PS1" volume_set="RSDKV2PS1"'
-        ' publisher="RSDKV2PS1" data_preparer="MKPSXISO" creation_date="%s00" modification_date="%s00"/>' % (
+        '\t\t<identifiers system="PLAYSTATION" application="PLAYSTATION" volume="RSDKV3PS1" volume_set="RSDKV3PS1"'
+        ' publisher="RSDKV3PS1" data_preparer="MKPSXISO" creation_date="%s00" modification_date="%s00"/>' % (
             DISC_DATE, DISC_DATE),
     ] + (['\t\t<license file=%s/>' % quoteattr(lic)] if lic else []) + [
         '\t\t<directory_tree>',

@@ -1,6 +1,8 @@
 #include "RetroEngine.hpp"
 
 #if RETRO_PLATFORM == RETRO_PS1
+#include "../ps1/loading.hh"
+
 // Layer rows past TILELAYER_CHUNK_H (PS1-sized, Scene.hpp) are read into a scratch row so the file
 // position stays right; counted for GDB until the Credits FG (128 rows) gets its own handling.
 volatile uint32_t g_ps1LayerRowsClamped = 0;
@@ -206,7 +208,13 @@ void ProcessStage(void)
             for (int m = 0; m < modList.size(); ++m) ScanModFolder(&modList[m]);
 #endif
             ResetBackgroundSettings();
+#if RETRO_PLATFORM == RETRO_PS1
+            PS1LoadingBegin(); // loading icon if the load takes > 250 ms (ps1/loading)
             LoadStageFiles();
+            PS1LoadingEnd();
+#else
+            LoadStageFiles();
+#endif
 
             if (renderType == RENDER_HW) {
                 texBufferMode = 0;

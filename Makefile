@@ -81,6 +81,14 @@ LDFLAGS   += -Wl,--defsym,RAM_SIZE=2M
 # nugget's hardware-measured memcpy/memset (8-word / 4-word blocks).
 LDFLAGS   += -Wl,-wrap,memcpy -Wl,-wrap,memset
 
+# Trig tables computed at build time on the host (tools/trig/gen_trig.c), included by Math.cpp.
+CPPFLAGS += -I build/gen
+build/gen/trig_tables.inc: tools/trig/gen_trig.c
+	mkdir -p build/gen
+	cc -O2 -o build/gen/gen_trig $<
+	build/gen/gen_trig > $@
+RSDKv3/Math.o RSDKv3/Math.dep: build/gen/trig_tables.inc
+
 # The FMV Huffman (VLC) decoder is the hot loop of video playback: optimise it for speed.
 ps1/mdec.o: CPPFLAGS += -O2
 

@@ -4,6 +4,9 @@
 // Scene3D buffers are PS1-sized (Scene3D.hpp): clamp script indices / counts, track the largest
 // seen and count overflows (for GDB; phase 7 sizes them for good).
 volatile uint32_t g_ps1Scene3DOverflow = 0;
+volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table past the PS1-sized arrays
+volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 instead of a trap)
+volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
 volatile int32_t g_ps1Scene3DMaxVertex = 0;
 volatile int32_t g_ps1Scene3DMaxFace   = 0;
 static inline int PS1Scene3DIndex(int i, int size, volatile int32_t *max)
@@ -1962,6 +1965,13 @@ void LoadBytecode(int stageListID, int scriptID)
         scriptCodeSize |= fileBuffer << 16;
         FileRead(&fileBuffer, 1);
         scriptCodeSize |= fileBuffer << 24;
+#if RETRO_PLATFORM == RETRO_PS1
+        if (scriptCodePos + scriptCodeSize > SCRIPTDATA_COUNT) { // PS1-sized array (Script.hpp)
+            g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
+            CloseFile();
+            return;
+        }
+#endif
 
         while (scriptCodeSize > 0) {
             FileRead(&fileBuffer, 1);
@@ -2005,6 +2015,13 @@ void LoadBytecode(int stageListID, int scriptID)
         jumpTableSize |= fileBuffer << 16;
         FileRead(&fileBuffer, 1);
         jumpTableSize |= fileBuffer << 24;
+#if RETRO_PLATFORM == RETRO_PS1
+        if (jumpTablePos + jumpTableSize > JUMPTABLE_COUNT) {
+            g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
+            CloseFile();
+            return;
+        }
+#endif
 
         while (jumpTableSize > 0) {
             FileRead(&fileBuffer, 1);
@@ -2238,6 +2255,12 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
     functionStackPos  = 0;
     while (running) {
         int opcode           = scriptCode[scriptCodePtr++];
+#if RETRO_PLATFORM == RETRO_PS1
+        if ((uint)opcode >= FUNC_MAX_CNT) { // corrupt / desynced code: stop this sub instead of jumping wild
+            g_ps1ScriptBadOpcode = g_ps1ScriptBadOpcode + 1;
+            break;
+        }
+#endif
         int opcodeSize       = functions[opcode].opcodeSize;
         int scriptCodeOffset = scriptCodePtr;
 
@@ -2920,13 +2943,31 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
             case FUNC_INC: ++scriptEng.operands[0]; break;
             case FUNC_DEC: --scriptEng.operands[0]; break;
             case FUNC_MUL: scriptEng.operands[0] *= scriptEng.operands[1]; break;
-            case FUNC_DIV: scriptEng.operands[0] /= scriptEng.operands[1]; break;
+            case FUNC_DIV:
+#if RETRO_PLATFORM == RETRO_PS1 // GCC's zero-division check is a `break 7` trap on the R3000A (docs/09)
+                if (!scriptEng.operands[1]) {
+                    g_ps1ScriptDivZero = g_ps1ScriptDivZero + 1;
+                    scriptEng.operands[0] = 0;
+                    break;
+                }
+#endif
+                scriptEng.operands[0] /= scriptEng.operands[1];
+                break;
             case FUNC_SHR: scriptEng.operands[0] >>= scriptEng.operands[1]; break;
             case FUNC_SHL: scriptEng.operands[0] <<= scriptEng.operands[1]; break;
             case FUNC_AND: scriptEng.operands[0] &= scriptEng.operands[1]; break;
             case FUNC_OR: scriptEng.operands[0] |= scriptEng.operands[1]; break;
             case FUNC_XOR: scriptEng.operands[0] ^= scriptEng.operands[1]; break;
-            case FUNC_MOD: scriptEng.operands[0] %= scriptEng.operands[1]; break;
+            case FUNC_MOD:
+#if RETRO_PLATFORM == RETRO_PS1
+                if (!scriptEng.operands[1]) {
+                    g_ps1ScriptDivZero = g_ps1ScriptDivZero + 1;
+                    scriptEng.operands[0] = 0;
+                    break;
+                }
+#endif
+                scriptEng.operands[0] %= scriptEng.operands[1];
+                break;
             case FUNC_FLIPSIGN: scriptEng.operands[0] = -scriptEng.operands[0]; break;
             case FUNC_CHECKEQUAL:
                 scriptEng.checkResult = scriptEng.operands[0] == scriptEng.operands[1];
@@ -3053,7 +3094,16 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 opcodeSize = 0;
                 --jumpTableStackPos;
                 break;
-            case FUNC_RAND: scriptEng.operands[0] = rand() % scriptEng.operands[1]; break;
+            case FUNC_RAND:
+#if RETRO_PLATFORM == RETRO_PS1
+                if (!scriptEng.operands[1]) {
+                    g_ps1ScriptDivZero = g_ps1ScriptDivZero + 1;
+                    scriptEng.operands[0] = 0;
+                    break;
+                }
+#endif
+                scriptEng.operands[0] = rand() % scriptEng.operands[1];
+                break;
             case FUNC_SIN: {
                 scriptEng.operands[0] = Sin512(scriptEng.operands[1]);
                 break;
