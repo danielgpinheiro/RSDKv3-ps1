@@ -42,6 +42,8 @@ ps1/xa_music.cpp \
 ps1/mdec.cpp \
 ps1/video.cpp \
 ps1/loading.cpp \
+ps1/sprite_atlas.cpp \
+ps1/tileset.cpp \
 ps1/render.cpp \
 ps1/audio.cpp \
 

@@ -1,13 +1,13 @@
 #!/bin/bash
-# Game disc from a loose Sonic CD Data/ tree (phase 2): copy it into build/iso without the PC
-# source assets (tools/disc/build_disc.py SOURCE_ONLY: .gif .wav .ogg; .txt stays, the game reads
-# it) and macOS metadata, then `make disc` (mkpsxiso + verify_disc, no license).
-# DATA = a Data/ tree: ../SonicCD_Extracted/Data, or tools/extract_rsdk.py's output from Data.rsdk.
-# Converted assets (atlases, tiles, SFX, music) join in later phases.
+# Game disc: tools/build_assets.py (Data.rsdk or an extracted Data/ tree -> build/iso/Data with the
+# converted assets) then `make disc` (mkpsxiso + verify_disc, no license; build_disc leaves the PC
+# sources .gif .wav .ogg off the disc, .txt stays: Sonic CD reads it at runtime).
+# RSDK = the Steam Data.rsdk (default ../SonicCD_Extracted/Data.rsdk), or DATA = a Data/ tree.
 set -eu
 cd "$(dirname "$0")/.."
-DATA=${DATA:-../SonicCD_Extracted/Data}
-rm -rf build/iso && mkdir -p build/iso
-rsync -a --exclude '*.gif' --exclude '*.wav' --exclude '*.ogg' --exclude '.DS_Store' "$DATA/" build/iso/Data/
-echo "iso root: $(find build/iso -type f | wc -l | tr -d ' ') files, $(du -sh build/iso | cut -f1)"
+if [ -n "${DATA:-}" ]; then
+  /usr/bin/python3 tools/build_assets.py --data "$DATA"
+else
+  /usr/bin/python3 tools/build_assets.py --rsdk "${RSDK:-../SonicCD_Extracted/Data.rsdk}"
+fi
 make -s disc

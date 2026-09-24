@@ -2,6 +2,8 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/loading.hh"
+#include "../ps1/sprite_atlas.hh"
+#include "../ps1/tileset.hh"
 #include "../ps1/video.hh"
 
 // Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
@@ -610,7 +612,17 @@ void LoadStageFiles(void)
             }
             CloseFile();
         }
-#if RETRO_PLATFORM != RETRO_PS1 // PS1: the stage's tiles are uploaded to VRAM pre-converted (phase 3)
+#if RETRO_PLATFORM == RETRO_PS1
+        // Pre-converted at build time (tools/tiles, tools/atlas): the tile pages and the stage's
+        // sprite atlas go straight to VRAM; the tile GIF's colours 0x80-0xFF go into the active
+        // palette as upstream LoadStageGIFFile does.
+        {
+            static uint8_t pal[768];
+            if (PS1TileSetLoad(stageList[activeStageList][stageListPosition].folder, pal))
+                for (int c = 0x80; c < 0x100; ++c) SetPaletteEntry(-1, c, pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]);
+            PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder);
+        }
+#else
         FileInfo info;
         if (LoadStageFile("16x16Tiles.gif", stageListPosition, &info)) {
             CloseFile();
