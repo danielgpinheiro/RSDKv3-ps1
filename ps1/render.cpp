@@ -26,10 +26,16 @@ ushort tileUVArray[TILEUV_SIZE];
 bool render3DEnabled = false;
 byte texBufferMode   = 0;
 
+// Upstream InitRenderDevice / SetScreenSize (Drawing.cpp) also size the logic's view: scroll
+// edges and the object activity border (OBJECT_BORDER_X2 = 0 would leave every bounds-priority
+// object inactive).
 int InitRenderDevice()
 {
-    SCREEN_XSIZE   = DEFAULT_SCREEN_XSIZE;
-    SCREEN_CENTERX = SCREEN_XSIZE / 2;
+    SCREEN_XSIZE        = DEFAULT_SCREEN_XSIZE;
+    SCREEN_CENTERX      = SCREEN_XSIZE / 2;
+    SCREEN_SCROLL_LEFT  = SCREEN_CENTERX - 8;
+    SCREEN_SCROLL_RIGHT = SCREEN_CENTERX + 8;
+    OBJECT_BORDER_X2    = SCREEN_XSIZE + 0x80;
     return 1;
 }
 void FlipScreen() {}
@@ -37,8 +43,36 @@ void GenerateBlendLookupTable() {}
 void UpdateHardwareTextures() {}
 void ClearScreen(byte index) {}
 
-void DrawObjectList(int layer) {}
-void DrawStageGFX() {}
+// Draw subs are game logic too (Sonic CD's title card releases the player and starts the timer
+// from its draw sub), so they run exactly as upstream; only their Draw* calls are no-ops.
+void DrawObjectList(int layer)
+{
+    int size = drawListEntries[layer].listSize;
+    for (int i = 0; i < size; ++i) {
+        objectLoop = drawListEntries[layer].entityRefs[i];
+        int type   = objectEntityList[objectLoop].type;
+        if (type) {
+            activePlayer = 0;
+            if (scriptCode[objectScriptList[type].subDraw.scriptCodePtr] > 0)
+                ProcessScript(objectScriptList[type].subDraw.scriptCodePtr, objectScriptList[type].subDraw.jumpTablePtr, SUB_DRAW);
+        }
+    }
+}
+
+// Upstream DrawStageGFX (Drawing.cpp) without the layers: water position, the draw lists in the
+// same order (7 before 6 as upstream).
+void DrawStageGFX()
+{
+    waterDrawPos = waterLevel - yScrollOffset;
+    if (waterDrawPos < 0)
+        waterDrawPos = 0;
+    if (waterDrawPos > SCREEN_YSIZE)
+        waterDrawPos = SCREEN_YSIZE;
+    for (int l = 0; l < 6; ++l) DrawObjectList(l);
+    if (forceUseScripts || Engine.usingOrigins)
+        DrawObjectList(7);
+    DrawObjectList(6);
+}
 void DrawDebugOverlays() {}
 
 void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A) {}

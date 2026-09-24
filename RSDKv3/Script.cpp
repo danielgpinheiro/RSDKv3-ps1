@@ -1,12 +1,16 @@
 #include "RetroEngine.hpp"
 
 #if RETRO_PLATFORM == RETRO_PS1
+#include "../ps1/video.hh"
+
 // Scene3D buffers are PS1-sized (Scene3D.hpp): clamp script indices / counts, track the largest
 // seen and count overflows (for GDB; phase 7 sizes them for good).
 volatile uint32_t g_ps1Scene3DOverflow = 0;
 volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table past the PS1-sized arrays
 volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 instead of a trap)
 volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
+// Draw3DScene cost of the last call, hblanks (profile; phase 7 moves it to the GTE)
+volatile uint32_t g_ps1Prof3DTransformHbl = 0, g_ps1Prof3DSortHbl = 0, g_ps1Prof3DDrawHbl = 0;
 volatile int32_t g_ps1Scene3DMaxVertex = 0;
 volatile int32_t g_ps1Scene3DMaxFace   = 0;
 static inline int PS1Scene3DIndex(int i, int size, volatile int32_t *max)
@@ -3853,9 +3857,23 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
             case FUNC_NOT: scriptEng.operands[0] = ~scriptEng.operands[0]; break;
             case FUNC_DRAW3DSCENE:
                 opcodeSize = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+            {
+                uint32_t t0 = PS1Hblanks();
+                TransformVertexBuffer();
+                uint32_t t1 = PS1Hblanks();
+                Sort3DDrawList();
+                uint32_t t2 = PS1Hblanks();
+                Draw3DScene(scriptInfo->spriteSheetID);
+                g_ps1Prof3DTransformHbl = (uint16_t)(t1 - t0);
+                g_ps1Prof3DSortHbl      = (uint16_t)(t2 - t1);
+                g_ps1Prof3DDrawHbl      = PS1HblanksSince(t2);
+            }
+#else
                 TransformVertexBuffer();
                 Sort3DDrawList();
                 Draw3DScene(scriptInfo->spriteSheetID);
+#endif
                 break;
             case FUNC_SETIDENTITYMATRIX:
                 opcodeSize = 0;

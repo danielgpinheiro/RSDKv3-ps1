@@ -29,7 +29,6 @@ volatile uint32_t g_ps1PerfOverHbl         = 0; // frames whose CPU time exceede
 volatile uint32_t g_ps1HeapTotal           = 0; // bytes between bss end and the stack
 volatile uint32_t g_ps1HeapHeadroom        = 0; // bytes never reached by the heap high-water mark
 volatile uint32_t g_ps1InitDone            = 0; // Engine.Init() returned
-volatile uint32_t g_ps1PadTestMask         = 0; // GDB: engine input bits to force (phase 4 brings the pad)
 static uint32_t s_ps1PerfLastCount         = 0;
 
 psyqo::GPU *g_ps1GPU            = nullptr;
@@ -78,6 +77,12 @@ class RSDKv3PS1App final : public psyqo::Application {
 #endif
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         Engine.Init();
+#ifdef PS1_BOOT_FOLDER
+        // Sonic CD's scripts set Options.GameMode before starting a stage (tools/bytecode_scan.py:
+        // Title / Stage Select 0, Menu 0 or 1, Time Attack 2). A `BOOT=` stage starts like the
+        // Stage Select does (BOOT_GAMEMODE, default 0).
+        SetGlobalVariableByName("Options.GameMode", PS1_BOOT_GAMEMODE);
+#endif
         PS1LoadingEnd();
         g_ps1InitDone = 1;
     }

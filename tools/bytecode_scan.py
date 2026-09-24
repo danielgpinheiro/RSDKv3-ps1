@@ -10,7 +10,10 @@ Function and variable tables are parsed from RSDKv3/Script.cpp (FunctionInfo lis
 Reports, per bytecode file: uses of the functions/variables named with --find, and the int
 constants assigned to variables named with --values (e.g. VAR_3DSCENENOVERTICES).
 
-Usage: bytecode_scan.py DATA_DIR [--find NAME ...] [--values VAR ...]
+With --where FILE: attribute each --values write in that bytecode file (e.g. RS000.bin) to its
+object sub ("<object #>.<sub>", object numbers in load order within the file).
+
+Usage: bytecode_scan.py DATA_DIR [--find NAME ...] [--values VAR ...] [--where FILE]
 """
 import glob, os, re, struct, sys
 
@@ -27,9 +30,9 @@ def tables():
     return funcs, vars_
 
 
-def ints(path):
-    d, p = open(path, 'rb').read(), 4
-    n, = struct.unpack_from('<I', d, 0)
+def blocks(d, p):
+    n, = struct.unpack_from('<I', d, p)
+    p += 4
     out = []
     while len(out) < n:
         h = d[p]; p += 1
@@ -38,12 +41,31 @@ def ints(path):
                 out.append(struct.unpack_from('<i', d, p)[0]); p += 4
             else:
                 out.append(d[p]); p += 1
-    return out
+    return out, p
+
+
+def ints(path):
+    return blocks(open(path, 'rb').read(), 0)[0]
+
+
+def subs(path):
+    """Per object: (main, playerInteraction, draw, startup) code offsets as stored (absolute
+    scriptCode positions: a stage file's offsets start after the global code)."""
+    d = open(path, 'rb').read()
+    _, p = blocks(d, 0)
+    _, p = blocks(d, p)
+    count, = struct.unpack_from('<H', d, p)
+    p += 2
+    return [struct.unpack_from('<4i', d, p + 16 * i) for i in range(count)]
+
+
+WRITES = []  # (var, opcode name, constant, code position) of the last scan
 
 
 def scan(code, funcs, vars_, find, values):
     uses, vals, p = {}, {}, 0
     while p < len(code):
+        at = p
         op = code[p]; p += 1
         if op >= len(funcs):
             uses['<bad opcode %d>' % op] = uses.get('<bad opcode %d>' % op, 0) + 1
@@ -69,6 +91,7 @@ def scan(code, funcs, vars_, find, values):
                 operands.append(('str', None))
         if len(operands) >= 2 and operands[0][0] == 'var' and operands[0][1] in values and operands[1][0] == 'int':
             vals.setdefault(operands[0][1], set()).add((name, operands[1][1]))
+            WRITES.append((operands[0][1], name, operands[1][1], at))
     return uses, vals
 
 
@@ -81,6 +104,20 @@ def main():
     values = {x for x in values if not x.startswith('--')}
     find.discard('--values'); values.discard('--find')
     funcs, vars_ = tables()
+    if '--where' in a:
+        where = a[a.index('--where') + 1]
+        values.discard(where); find.discard(where)
+        bc = os.path.join(data, 'Scripts', 'ByteCode')
+        base = 0 if where.startswith('GS') else len(ints(os.path.join(bc, 'GS000.bin')))
+        path = os.path.join(bc, where)
+        del WRITES[:]
+        scan(ints(path), funcs, vars_, find, values)
+        starts = sorted((off - base, '%d.%s' % (i, n)) for i, t in enumerate(subs(path))
+                        for off, n in zip(t, ('main', 'player', 'draw', 'startup')) if off - base >= 0)
+        for var, op, val, at in WRITES:
+            owner = [n for off, n in starts if off <= at]
+            print('%s %s %d at %d in %s' % (var, op, val, at, owner[-1] if owner else '?'))
+        return
     for path in sorted(glob.glob(os.path.join(data, 'Scripts', 'ByteCode', '*.bin'))):
         uses, vals = scan(ints(path), funcs, vars_, find, values)
         if uses or vals:

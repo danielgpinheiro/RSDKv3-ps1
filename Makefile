@@ -45,12 +45,6 @@ ps1/loading.cpp \
 ps1/render.cpp \
 ps1/audio.cpp \
 
-# `make BOOT=<stage folder>` (e.g. R11A): start in that stage (test harness), scene id 1 unless
-# BOOT_ID is given. Rebuild RSDKv3/main.cpp when switching (touch it).
-ifneq ($(BOOT),)
-CPPFLAGS += -DPS1_BOOT_FOLDER='"$(BOOT)"' -DPS1_BOOT_ID='"$(or $(BOOT_ID),1)"'
-endif
-
 ifeq ($(PLATFORM_TEST),1)
 SRCS := ps1/platform_test.cpp $(filter-out RSDKv3/%,$(SRCS))
 endif
@@ -58,6 +52,13 @@ endif
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any
 # system headers the freestanding toolchain might otherwise surface.
 CPPFLAGS = -I ps1/libc -I RSDKv3 -DRETRO_USE_MOD_LOADER=0
+
+# `make BOOT=<stage folder>` (e.g. R11A): start in that stage (test harness), scene id 1 unless
+# BOOT_ID is given, started like the Stage Select does (Options.GameMode = BOOT_GAMEMODE, default
+# 0; the Menu sets 1, Time Attack 2). Rebuild RSDKv3/main.cpp when switching (touch it).
+ifneq ($(BOOT),)
+CPPFLAGS += -DPS1_BOOT_FOLDER='"$(BOOT)"' -DPS1_BOOT_ID='"$(or $(BOOT_ID),1)"' -DPS1_BOOT_GAMEMODE=$(or $(BOOT_GAMEMODE),0)
+endif
 
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)

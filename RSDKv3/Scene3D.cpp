@@ -242,6 +242,30 @@ void TransformVerticies(Matrix *matrix, int startIndex, int endIndex)
         vert->z      = (vx * matrix->values[0][2] >> 8) + (vy * matrix->values[1][2] >> 8) + (vz * matrix->values[2][2] >> 8) + matrix->values[3][2];
     } while (++startIndex < endIndex);
 }
+#if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
+// Stable merge sort, descending by depth (ties keep their order, like upstream's bubble sort).
+void PS1SortDrawList3D(DrawListEntry3D *list, int count)
+{
+    static DrawListEntry3D scratch[FACEBUFFER_SIZE];
+    DrawListEntry3D *src = list, *dst = scratch;
+    for (int width = 1; width < count; width <<= 1) {
+        for (int lo = 0; lo < count; lo += width << 1) {
+            int mid = lo + width < count ? lo + width : count;
+            int hi  = lo + (width << 1) < count ? lo + (width << 1) : count;
+            int a = lo, b = mid, o = lo;
+            while (a < mid && b < hi) dst[o++] = src[b].depth > src[a].depth ? src[b++] : src[a++];
+            while (a < mid) dst[o++] = src[a++];
+            while (b < hi) dst[o++] = src[b++];
+        }
+        DrawListEntry3D *t = src;
+        src                = dst;
+        dst                = t;
+    }
+    if (src != list)
+        for (int i = 0; i < count; ++i) list[i] = src[i];
+}
+#endif
+
 void Sort3DDrawList()
 {
     for (int i = 0; i < faceCount; ++i) {
@@ -251,6 +275,14 @@ void Sort3DDrawList()
         drawList3D[i].faceID = i;
     }
 
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the
+    // same order; a bottom-up merge sort does Sonic CD's title (160 faces) in ~1,200 compares instead
+    // of ~12,700 (the bubble sort took 235 hblanks = 0.9 frame, docs/28 phase 2.3). Identical order
+    // checked on the host: tools/scene3d/sort3d_check.sh.
+    PS1SortDrawList3D(drawList3D, faceCount);
+    return;
+#endif
     for (int i = 0; i < faceCount; ++i) {
         for (int j = faceCount - 1; j > i; --j) {
             if (drawList3D[j].depth > drawList3D[j - 1].depth) {

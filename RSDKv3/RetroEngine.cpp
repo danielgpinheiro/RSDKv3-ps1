@@ -1325,12 +1325,37 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
 #endif
 
         if (strlen(Engine.startSceneFolder) && strlen(Engine.startSceneID)) {
+#if RETRO_PLATFORM == RETRO_PS1
+            // PS1 (`make BOOT=`): start at the scene's real list position when GameConfig has it —
+            // Sonic CD's time travel offsets stage.listPos within the regular list — else in the
+            // last slot of the PS1-sized list (the PC slot 0xFE is past it).
+            bool found = false;
+            for (int l = 0; l < STAGELIST_MAX && !found; ++l) {
+                for (int p = 0; p < stageListCount[l]; ++p) {
+                    if (StrComp(stageList[l][p].folder, Engine.startSceneFolder) && StrComp(stageList[l][p].id, Engine.startSceneID)) {
+                        startList_Game  = l;
+                        startStage_Game = p;
+                        found           = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                SceneInfo *scene = &stageList[STAGELIST_BONUS][STAGELIST_ENTRY_COUNT - 1];
+                strcpy(scene->name, "_RSDK_SCENE");
+                strcpy(scene->folder, Engine.startSceneFolder);
+                strcpy(scene->id, Engine.startSceneID);
+                startList_Game  = STAGELIST_BONUS;
+                startStage_Game = STAGELIST_ENTRY_COUNT - 1;
+            }
+#else
             SceneInfo *scene = &stageList[STAGELIST_BONUS][0xFE]; // slot 0xFF is used for "none" startStage
             strcpy(scene->name, "_RSDK_SCENE");
             strcpy(scene->folder, Engine.startSceneFolder);
             strcpy(scene->id, Engine.startSceneID);
             startList_Game  = STAGELIST_BONUS;
             startStage_Game = 0xFE;
+#endif
         }
 
         Engine.usingOrigins = GetGlobalVariableID("game.playMode") != 0xFF;

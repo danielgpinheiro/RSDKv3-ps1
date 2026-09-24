@@ -29,7 +29,14 @@ github.com/danielgpinheiro/RSDKv3-ps1 (**private**; push here).
 make -j8                        # rsdkv3.ps-exe (+ .elf, .map); must fit 2 MB
 tools/smoke_disc.sh             # phase 0 test disc (subset of SonicCD_Extracted) + make disc
 tools/smoke_test.sh [OUT]       # phase 0 smoke test over GDB (files CRC, SPU, icon, pad, fps)
+tools/data_disc.sh              # game disc from ../SonicCD_Extracted/Data (no .gif/.wav/.ogg)
+tools/boot_test.sh [OUT F1 F2]  # headless boot: loads (vblanks), perf, profile, heap, guards
+make BOOT=R11A && tools/logic_test.sh   # start in a stage; drive the player via g_ps1PadTestMask
+tools/scene3d/sort3d_check.sh   # host: PS1 3D draw-list sort == upstream order
+python3 tools/bytecode_scan.py DATA --find X --values VAR [--where RS000.bin]   # who uses what
 ```
+Time loads with the vblank IRQ count (`g_ps1GPU->m_frameCount`): psyqo `GPU::now()` stalls while
+callbacks aren't pumped.
 PCSX-Redux in the background with a timeout, GDB for evidence (`../docs/21`). Start it
 **without `-run`** when GDB sets breakpoints before the first `continue`. Back up
 `~/.config/pcsx-redux/pcsx.json` around `-bios` / `-memcard*` runs.

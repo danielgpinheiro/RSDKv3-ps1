@@ -2,6 +2,17 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include "../ps1/loading.hh"
+#include "../ps1/video.hh"
+
+// Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
+volatile uint32_t g_ps1ProfObjectsHbl = 0; // ProcessObjects: main + player-interaction subs
+volatile uint32_t g_ps1ProfDrawHbl    = 0; // DrawStageGFX: draw subs (+ drawing from phase 3)
+#define PS1_PROF(var, call)                  \
+    {                                         \
+        uint32_t ps1ProfT0 = PS1Hblanks();    \
+        call;                                 \
+        var = PS1HblanksSince(ps1ProfT0);     \
+    }
 
 // Layer rows past TILELAYER_CHUNK_H (PS1-sized, Scene.hpp) are read into a scratch row so the file
 // position stays right; counted for GDB until the Credits FG (128 rows) gets its own handling.
@@ -16,6 +27,7 @@ static ushort *PS1LayerRow(int layer, int y)
 }
 #define PS1_LAYER_ROW(layer, y) PS1LayerRow(layer, y)
 #else
+#define PS1_PROF(var, call) call
 #define PS1_LAYER_ROW(layer, y) (&stageLayouts[layer].tiles[(y) * 0x100])
 #endif
 #include <stdlib.h>
@@ -296,7 +308,7 @@ void ProcessStage(void)
             }
 
             // Update
-            ProcessObjects();
+            PS1_PROF(g_ps1ProfObjectsHbl, ProcessObjects());
 
             if (cameraTarget > -1) {
                 if (cameraEnabled == 1) {
@@ -314,7 +326,7 @@ void ProcessStage(void)
                 }
             }
 
-            DrawStageGFX();
+            PS1_PROF(g_ps1ProfDrawHbl, DrawStageGFX());
             break;
 
         case STAGEMODE_PAUSED:
