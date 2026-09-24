@@ -85,7 +85,6 @@ decltype(texPaletteNum) texPaletteNum{};
 decltype(textMenuSurfaceNo) textMenuSurfaceNo{};
 decltype(tileUVArray) tileUVArray{};
 decltype(tiles128x128) tiles128x128{};
-decltype(tilesetGFXData) tilesetGFXData{};
 decltype(timeEnabled) timeEnabled{};
 decltype(titleCardText) titleCardText{};
 decltype(titleCardWord2) titleCardWord2{};
@@ -208,3 +207,6 @@ int LoadStageFile(const char *filePath, int stageID, FileInfo *info) {
     return LoadFile(dest, info);
 }
 
+// PS1 profiling clock (ps1/video.cpp) used by Script.cpp's Draw3DScene profile.
+uint32_t PS1Hblanks() { return 0; }
+uint32_t PS1HblanksSince(uint32_t) { return 0; }

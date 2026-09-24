@@ -9,6 +9,24 @@ volatile uint32_t g_ps1Scene3DOverflow = 0;
 volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table past the PS1-sized arrays
 volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 instead of a trap)
 volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
+volatile uint32_t g_ps1ScriptBadPtr    = 0; // sub/function pointers past the PS1 arrays (not the PC sentinels)
+#define PS1_PC_SCRIPTDATA_END (0x40000 - 1) // PC SCRIPTDATA_COUNT - 1: "no sub" in the bytecode files
+#define PS1_PC_JUMPTABLE_END  (0x4000 - 1)
+static void PS1FixScriptPtr(ScriptPtr *p)
+{
+    if (p->scriptCodePtr == PS1_PC_SCRIPTDATA_END)
+        p->scriptCodePtr = SCRIPTDATA_COUNT - 1;
+    else if ((uint)p->scriptCodePtr >= SCRIPTDATA_COUNT - 1) {
+        g_ps1ScriptBadPtr    = g_ps1ScriptBadPtr + 1;
+        p->scriptCodePtr = SCRIPTDATA_COUNT - 1;
+    }
+    if (p->jumpTablePtr == PS1_PC_JUMPTABLE_END)
+        p->jumpTablePtr = JUMPTABLE_COUNT - 1;
+    else if ((uint)p->jumpTablePtr >= JUMPTABLE_COUNT - 1) {
+        g_ps1ScriptBadPtr   = g_ps1ScriptBadPtr + 1;
+        p->jumpTablePtr = JUMPTABLE_COUNT - 1;
+    }
+}
 // Draw3DScene cost of the last call, hblanks (profile; phase 7 moves it to the GTE)
 volatile uint32_t g_ps1Prof3DTransformHbl = 0, g_ps1Prof3DSortHbl = 0, g_ps1Prof3DDrawHbl = 0;
 volatile int32_t g_ps1Scene3DMaxVertex = 0;
@@ -1970,7 +1988,7 @@ void LoadBytecode(int stageListID, int scriptID)
         FileRead(&fileBuffer, 1);
         scriptCodeSize |= fileBuffer << 24;
 #if RETRO_PLATFORM == RETRO_PS1
-        if (scriptCodePos + scriptCodeSize > SCRIPTDATA_COUNT) { // PS1-sized array (Script.hpp)
+        if (scriptCodePos + scriptCodeSize > SCRIPTDATA_COUNT - 1) { // PS1-sized array (Script.hpp); last slot = the 0 "no sub" sentinel
             g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
             CloseFile();
             return;
@@ -2020,7 +2038,7 @@ void LoadBytecode(int stageListID, int scriptID)
         FileRead(&fileBuffer, 1);
         jumpTableSize |= fileBuffer << 24;
 #if RETRO_PLATFORM == RETRO_PS1
-        if (jumpTablePos + jumpTableSize > JUMPTABLE_COUNT) {
+        if (jumpTablePos + jumpTableSize > JUMPTABLE_COUNT - 1) {
             g_ps1ScriptOverflow = g_ps1ScriptOverflow + 1;
             CloseFile();
             return;
@@ -2178,6 +2196,17 @@ void LoadBytecode(int stageListID, int scriptID)
             FileRead(&fileBuffer, 1);
             function->ptr.jumpTablePtr |= fileBuffer << 24;
         }
+#if RETRO_PLATFORM == RETRO_PS1
+        // The bytecode marks unused subs/functions with PC's last array slots (0x3FFFF / 0x3FFF,
+        // SCRIPTDATA_COUNT / JUMPTABLE_COUNT - 1 at PC size): ~1 MB past the PS1-sized scriptCode.
+        // Point them at the PS1 arrays' last slots (kept 0) instead.
+        for (int s = 0; s < scriptCount; ++s) {
+            ObjectScript *script = &objectScriptList[scriptID + s];
+            ScriptPtr *subs[4]   = { &script->subMain, &script->subPlayerInteraction, &script->subDraw, &script->subStartup };
+            for (int i = 0; i < 4; ++i) PS1FixScriptPtr(subs[i]);
+        }
+        for (int f = 0; f < functionCount; ++f) PS1FixScriptPtr(&scriptFunctionList[f].ptr);
+#endif
 
         CloseFile();
     }

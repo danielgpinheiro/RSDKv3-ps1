@@ -24,6 +24,8 @@
 
 #include "RetroEngine.hpp"
 
+extern volatile uint32_t g_ps1ScriptOverflow; // Script.cpp (PS1 array guard)
+
 static std::string readStr() {
     byte len = 0;
     FileRead(&len, 1);
@@ -136,7 +138,13 @@ int main(int argc, char **argv) {
         for (int pos = 0; pos < stageListCount[list]; ++pos) {
             activeStageList   = list;
             stageListPosition = pos;
+            uint32_t overflow = g_ps1ScriptOverflow;
             int objects       = loadStageScripts();
+            if (g_ps1ScriptOverflow != overflow) { // LoadBytecode refused a file: PS1 arrays too small
+                fprintf(stderr, "ERROR %s: bytecode does not fit SCRIPTDATA_COUNT/JUMPTABLE_COUNT (code %d ints)\n",
+                        stageList[list][pos].folder, scriptCodePos);
+                return 1;
+            }
             ProcessStartupObjects();
             std::string path = out + "/" + stageList[list][pos].folder + ".txt";
             FILE *f          = fopen(path.c_str(), written.count(path) ? "a" : "w");

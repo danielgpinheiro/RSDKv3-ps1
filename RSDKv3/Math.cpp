@@ -6,7 +6,7 @@
 #define M_PI 3.14159265358979323846264338327950288
 #endif
 
-#if RETRO_PLATFORM == RETRO_PS1
+#if RETRO_PLATFORM == RETRO_PS1 && !defined(RETRO_PS1_HOST_TOOL) // host tools compute them natively
 // PS1: the tables below are computed at build time (tools/trig/gen_trig.c runs this function's
 // loops on the host; the atan table alone is 65,536 atan2f = ~26 s of soft-float at boot).
 #include "trig_tables.inc"

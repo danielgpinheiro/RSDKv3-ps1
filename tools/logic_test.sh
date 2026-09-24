@@ -38,7 +38,7 @@ if g_ps1PerfFrames == $S2
 end
 if g_ps1PerfFrames == $S3
   printf "PROF objects=%u drawSubs=%u (hblanks, last frame)\n", g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl
-  printf "GUARDS scriptOverflow=%u divZero=%u badOpcode=%u rowsClamped=%u scene3D=%u heapHeadroom=%u\n", g_ps1ScriptOverflow, g_ps1ScriptDivZero, g_ps1ScriptBadOpcode, g_ps1LayerRowsClamped, g_ps1Scene3DOverflow, g_ps1HeapHeadroom
+  printf "GUARDS scriptOverflow=%u badPtr=%u divZero=%u badOpcode=%u rowsClamped=%u scene3D=%u heapHeadroom=%u\n", g_ps1ScriptOverflow, g_ps1ScriptBadPtr, g_ps1ScriptDivZero, g_ps1ScriptBadOpcode, g_ps1LayerRowsClamped, g_ps1Scene3DOverflow, g_ps1HeapHeadroom
   detach
 else
   continue
