@@ -162,6 +162,8 @@ int main(int argc, char **argv) {
         perror(argv[1]);
         return 1;
     }
+    if (const char *lang = getenv("RSDK_LANGUAGE")) // RETRO_EN 0 ... RETRO_JP 5: language-dependent sheets
+        Engine.language = atoi(lang);
     activePalette   = fullPalette[0]; // the engine points these at palette bank 0 at init
     activePalette32 = fullPalette32[0];
     Engine.usingBytecode = true;

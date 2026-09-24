@@ -5,8 +5,14 @@ int textMenuSurfaceNo = 0;
 
 FontCharacter fontCharacterList[FONTCHAR_COUNT];
 
+#if RETRO_PLATFORM == RETRO_PS1
+void PS1LoadFontTable(const char *fontPath); // ps1/render.cpp: pre-scaled glyphs (tools/font)
+#endif
 void LoadFontFile(const char *filePath)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1LoadFontTable(filePath);
+#endif
     byte fileBuffer = 0;
     int cnt         = 0;
     FileInfo info;

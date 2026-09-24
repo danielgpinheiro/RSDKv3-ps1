@@ -13,7 +13,7 @@ disc. Later phases add audio (SPU-ADPCM, CD-XA) and video (STR) steps.
 Output: OUT/build/iso/Data/** and OUT/build/manifest/ (OUT = the repo by default, so `make disc`
 works on it). Needs: a C++17 compiler (CXX), Python with Pillow + numpy.
 
-Usage: build_assets.py (--rsdk PATH/Data.rsdk | --data PATH/Data) [--out DIR]
+Usage: build_assets.py (--rsdk PATH/Data.rsdk | --data PATH/Data) [--out DIR] [--lang en|jp]
 """
 import argparse, os, shutil, subprocess, sys
 
@@ -23,6 +23,7 @@ PY = sys.executable
 # Stages whose sprites don't fit the VRAM sprite area yet (docs/28 phase 1: the Secrets gallery is
 # 4 page-columns over; handled in phase 4). The build continues without their atlas.
 ATLAS_KNOWN_OVER = {'Secrets'}
+LANG_IDS = {'en': 0, 'jp': 5}  # RetroEngine.hpp RetroLanguages
 
 
 def run(step, cmd, **kw):
@@ -36,6 +37,8 @@ def main():
     src.add_argument('--rsdk', help="Sonic CD's Data.rsdk (Steam)")
     src.add_argument('--data', help='an already extracted Data/ directory')
     ap.add_argument('--out', default=REPO, help='output root (gets build/iso/Data and build/manifest)')
+    ap.add_argument('--lang', default='en', choices=('en', 'jp'),
+                    help="the disc's language (one disc per language, docs/28 phase 4)")
     a = ap.parse_args()
     out = os.path.abspath(a.out)
     iso, manifest = os.path.join(out, 'build', 'iso'), os.path.join(out, 'build', 'manifest')
@@ -53,6 +56,7 @@ def main():
 
     cxx = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('g++') or 'c++'
     run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + cxx])
+    run('3 fonts', [PY, os.path.join(HERE, 'font', 'prescale_font.py'), data, '--lang', a.lang])
     # One manifest + atlas set per selectable player (docs/28 3.2: Sonic and Tails don't fit one atlas):
     # player list position 0 = Sonic -> <Stage>.atl, 1 = Tails -> <Stage>_t.atl (the act's placed
     # Player Object loads the player's .ani; ps1/sprite_atlas picks the file by playerListPos).
@@ -60,8 +64,9 @@ def main():
         mdir = manifest + suffix
         if os.path.exists(mdir):
             shutil.rmtree(mdir)
-        run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, mdir, str(player)], stdout=subprocess.DEVNULL)
-        r = run('3 atlas', [PY, os.path.join(HERE, 'atlas', 'build_atlas.py'), data, mdir, '--suffix', suffix],
+        run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, mdir, str(player)], stdout=subprocess.DEVNULL,
+            env=dict(os.environ, RSDK_LANGUAGE=str(LANG_IDS[a.lang])))
+        r = run('3 atlas', [PY, os.path.join(HERE, 'atlas', 'build_atlas.py'), data, mdir, '--suffix', suffix, '--lang', a.lang],
                 check=False, capture_output=True, text=True)
         errors = [l for l in r.stdout.splitlines() if l.startswith('ERROR')]
         unexpected = [l for l in errors if l.split()[1].rstrip(':') not in ATLAS_KNOWN_OVER]  # 'ERROR <stage>: ...'
@@ -73,6 +78,9 @@ def main():
             sys.exit('atlas failed:\n' + '\n'.join(unexpected or [r.stdout[-2000:], r.stderr[-2000:]]))
 
     run('4 tiles', [PY, os.path.join(HERE, 'tiles', 'convert_tiles.py'), data])
+    # The exe reads the disc's language at boot (RetroEngine::Init on PS1): one byte, RETRO_EN / RETRO_JP.
+    open(os.path.join(data, 'Game', 'PS1Language.bin'), 'wb').write(bytes([LANG_IDS[a.lang]]))
+    print('[4 lang] Data/Game/PS1Language.bin = %s' % a.lang)
     r = run('5 bgstrips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data], capture_output=True, text=True)
     print('[5 bgstrips] %d files (self-checked), per player' % sum(1 for l in r.stdout.splitlines() if ' regions ' in l and ' regions  0 ' not in l))
     print('assets ready in %s' % data)

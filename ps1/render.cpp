@@ -295,6 +295,7 @@ struct PS1Piece {
 // Splits frame (sprX, sprY, width, height) of surface sheetID into cluster pieces and calls fn on each.
 // Frames past the bottom of their sheet continue into the next loaded sheet of the same width, as on
 // PC where every sheet sits back to back in one buffer (Sonic CD's menu headings: MenuGfx1 -> 2).
+template <typename Fn> static void PS1ForEachPieceAtlas(int sheet, int sheetID, int width, int height, int sprX, int sprY, Fn fn);
 template <typename Fn> static void PS1ForEachPiece(int sheetID, int width, int height, int sprX, int sprY, Fn fn)
 {
     int sheet = PS1SurfaceSheet(sheetID);
@@ -302,10 +303,18 @@ template <typename Fn> static void PS1ForEachPiece(int sheetID, int width, int h
         g_ps1SheetUnbound = g_ps1SheetUnbound + 1;
         return;
     }
+    PS1ForEachPieceAtlas(sheet, sheetID, width, height, sprX, sprY, fn);
+}
+
+// Same with an atlas sheet index (sheetID: its surface, for the overflow into the next sheet; -1 = none).
+template <typename Fn> static void PS1ForEachPieceAtlas(int sheet, int sheetID, int width, int height, int sprX, int sprY, Fn fn)
+{
     int oy = 0;
     while (height > 0) {
         int sh = g_ps1AtlasSheets[sheet].height;
         while (sprY >= sh) { // overflow into the next loaded sheet of the same width
+            if (sheetID < 0)
+                return;
             int w = g_ps1AtlasSheets[sheet].width, next = -1;
             for (int s = sheetID + 1; s < SURFACE_COUNT && next < 0; ++s) {
                 int a = PS1SurfaceSheet(s);
@@ -1638,5 +1647,119 @@ void DrawTexturedFace(void *v, byte sheetID)
     PS1ChainPrimsRawN(w, 9, 1);
     g_ps1Faces = g_ps1Faces + 1;
 }
-void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
+// Pre-scaled glyphs (tools/font/prescale_font.py, user decision 2026-09-24): the font's table,
+// loaded with it (LoadFontFile -> PS1LoadFontTable); entries per scale, drawn 1:1 from the atlas sheet.
+struct PS1Glyph {
+    uint16_t index, x, y, w, h;
+    int16_t dx, dy;
+};
+#define PS1_GLYPH_SCALES 4
+static PS1Glyph *s_glyphs = nullptr; // heap, exactly the table's size (Japanese Help: 1,436 entries, 20 KB)
+static uint16_t s_glyphScale[PS1_GLYPH_SCALES], s_glyphFirst[PS1_GLYPH_SCALES], s_glyphCount[PS1_GLYPH_SCALES];
+static int s_glyphScales = 0;
+static char s_glyphSheet[64];
+volatile uint32_t g_ps1GlyphTables = 0; // pre-scaled glyph tables loaded
+volatile uint32_t g_ps1GlyphFallback = 0, g_ps1GlyphFallbackScale = 0, g_ps1GlyphFallbackChar = 0; // chars drawn scaled (no pre-scaled glyph)
+
+void PS1LoadFontTable(const char *fontPath)
+{
+    s_glyphScales = 0;
+    psyqo_free(s_glyphs);
+    s_glyphs = nullptr;
+    char path[96];
+    int n = 0;
+    while (fontPath[n] && n < 80) path[n] = fontPath[n], ++n;
+    if (n > 4 && path[n - 4] == '.')
+        n -= 4;
+    memcpy(&path[n], "_ps1.bin", 9);
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return;
+    char magic[4];
+    uint16_t scales = 0;
+    bool ok = fread(magic, 1, 4, f) == 4 && !memcmp(magic, "PSF1", 4) && fread(&scales, 2, 1, f) == 1 && fread(s_glyphSheet, 1, 64, f) == 64;
+    int total = 0;
+    long body = ftell(f);
+    for (int k = 0; ok && k < scales && k < PS1_GLYPH_SCALES; ++k) { // pass 1: sizes
+        uint16_t hdr[2];
+        ok = fread(hdr, 2, 2, f) == 2 && fseek(f, hdr[1] * (long)sizeof(PS1Glyph), SEEK_CUR) == 0;
+        total += hdr[1];
+    }
+    ok = ok && total > 0 && (s_glyphs = (PS1Glyph *)psyqo_malloc(total * sizeof(PS1Glyph))) != nullptr && fseek(f, body, SEEK_SET) == 0;
+    total = 0;
+    for (int k = 0; ok && k < scales && k < PS1_GLYPH_SCALES; ++k) { // pass 2: entries
+        uint16_t hdr[2];
+        ok = fread(hdr, 2, 2, f) == 2;
+        if (ok) {
+            s_glyphScale[k] = hdr[0], s_glyphFirst[k] = (uint16_t)total, s_glyphCount[k] = hdr[1];
+            ok = fread(&s_glyphs[total], sizeof(PS1Glyph), hdr[1], f) == hdr[1];
+            total += hdr[1];
+            s_glyphScales = k + 1;
+        }
+    }
+    fclose(f);
+    s_glyphSheet[63] = 0;
+    if (!ok)
+        s_glyphScales = 0;
+    g_ps1GlyphTables = g_ps1GlyphTables + 1;
+}
+
+static const PS1Glyph *PS1FindGlyph(int scale, int index)
+{
+    for (int k = 0; k < s_glyphScales; ++k) {
+        if (s_glyphScale[k] != scale)
+            continue;
+        int lo = s_glyphFirst[k], hi = lo + s_glyphCount[k] - 1; // sorted by font index (prescale_font)
+        while (lo <= hi) {
+            int mid = (lo + hi) >> 1;
+            if (s_glyphs[mid].index == index)
+                return &s_glyphs[mid];
+            if (s_glyphs[mid].index < index)
+                lo = mid + 1;
+            else
+                hi = mid - 1;
+        }
+        return nullptr;
+    }
+    return nullptr;
+}
+
+// upstream DrawBitmapText (SW path): each character is a scaled sprite of the font's glyph rect on
+// textMenuSurfaceNo; with a pre-scaled table for this scale the glyph is drawn 1:1 instead (same place).
+void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount)
+{
+    TextMenu *tMenu = (TextMenu *)menu;
+    int Y           = YPos << 9;
+    if (rowCount < 0)
+        rowCount = tMenu->rowCount;
+    if (rowStart + rowCount > tMenu->rowCount)
+        rowCount = tMenu->rowCount - rowStart;
+    int psheet = -1;
+    for (int k = 0; k < s_glyphScales; ++k)
+        if (s_glyphScale[k] == scale && g_ps1AtlasSheetCount)
+            psheet = PS1AtlasFindSheet(s_glyphSheet);
+    while (rowCount > 0) {
+        int X = XPos << 9;
+        for (int i = 0; i < tMenu->entrySize[rowStart]; ++i) {
+            ushort c             = tMenu->textData[tMenu->entryStart[rowStart] + i];
+            FontCharacter *fChar = &fontCharacterList[c];
+            const PS1Glyph *g    = psheet >= 0 ? PS1FindGlyph(scale, c) : nullptr;
+            if (g) {
+                if (g->w && g->h && s_frameOpen && !PS1ObjectsHidden()) { // 0 x 0: too small at this scale
+                    int x = (X >> 9) + g->dx, y = (Y >> 9) + g->dy;
+                    PS1ForEachPieceAtlas(psheet, -1, g->w, g->h, g->x, g->y, [&](const PS1Piece &p) { PS1ChainPieceSprite(p, x + p.ox, y + p.oy); });
+                }
+            }
+            else {
+                g_ps1GlyphFallback = g_ps1GlyphFallback + 1, g_ps1GlyphFallbackScale = scale, g_ps1GlyphFallbackChar = c;
+                DrawSpriteScaled(FLIP_NONE, X >> 9, Y >> 9, -fChar->pivotX, -fChar->pivotY, scale, scale, fChar->width, fChar->height, fChar->srcX,
+                                 fChar->srcY, textMenuSurfaceNo);
+            }
+            X += fChar->xAdvance * scale;
+        }
+        Y += spacing * scale;
+        rowStart++;
+        rowCount--;
+    }
+}
 void DrawTextMenu(void *menu, int XPos, int YPos) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }

@@ -282,6 +282,17 @@ void RetroEngine::Init()
     CalculateTrigAngles();
     GenerateBlendLookupTable();
     InitUserdata();
+#if RETRO_PLATFORM == RETRO_PS1
+    { // One disc per language (docs/28 phase 4): the disc says which (tools/build_assets.py --lang).
+        FileInfo info;
+        if (LoadFile("Data/Game/PS1Language.bin", &info)) {
+            byte lang = RETRO_EN;
+            FileRead(&lang, 1);
+            CloseFile();
+            Engine.language = lang;
+        }
+    }
+#endif
 #if RETRO_USE_MOD_LOADER
     InitMods();
 #endif

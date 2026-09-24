@@ -26,7 +26,7 @@ Output: <Data>/Sprites/Atlas/<Stage>.atl (little-endian):
   block  : u16 x, y, w, h (VRAM halfwords), u32 offset of w*h u16 at dataOffset + offset
 Every frame is decoded back from the atlas and compared with its GIF (must be exact).
 
-Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report] [--suffix S]
+Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report] [--suffix S] [--lang en|jp]
   --suffix S: write <Stage>S.atl (per-player atlases: '' = Sonic, '_t' = Tails; manifests per player)
   --cols N: test budget; --report: feasibility only (pack + self-check, no files written; stages
   that don't fit report their texel needs and how many 4-bit columns they are short)
@@ -55,6 +55,50 @@ class AtlasError(Exception):
     pass
 
 
+LANG_TAGS = {'en': 'EN', 'jp': 'JP', 'fr': 'FR', 'de': 'DE', 'es': 'ES', 'it': 'IT'}
+LANG = 'en'  # --lang: the disc's language (docs/28 phase 4: one disc per language)
+
+
+def _data_path(data, path):
+    return os.path.join(data, path[5:] if path.lower().startswith('data/') else path)
+
+
+def text_chars(data, texts):
+    """Characters of the disc language's UTF-16 text files (upstream LoadTextFile); files tagged for
+    another language (EN_Help/..._EN.txt) are skipped, untagged ones kept."""
+    tags = set(LANG_TAGS.values())
+    mine = LANG_TAGS[LANG]
+    chars = set()
+    for t in texts:
+        found = {g for g in tags if '/%s_' % g in t or t.endswith('_%s.txt' % g)}
+        if (found and mine not in found) or not t.lower().endswith('.txt'):
+            continue
+        f = _data_path(data, t)
+        if os.path.exists(f):
+            b = open(f, 'rb').read()
+            if b[:2] == b'\xff\xfe':
+                chars |= {c for c in b[2:].decode('utf-16-le', 'replace') if c not in '\r\n'}
+    return {ord(c) for c in chars}
+
+
+def font_rects(data, path, chars=None):
+    """Glyph rects (x, y, w, h) of a font file (upstream LoadFontFile: 20-byte records {u32 id, u16 x, y,
+    w-1, h-1, ...}); with `chars`, only the glyphs whose id is one of those code points (LoadTextFile
+    maps each character to the font entry with that id)."""
+    f = _data_path(data, path)
+    if not os.path.exists(f):
+        return []
+    d, out = open(f, 'rb').read(), []
+    for p in range(0, len(d) - 19, 20):
+        cid = struct.unpack_from('<I', d, p)[0]
+        if chars is not None and cid not in chars:
+            continue
+        x, y = d[p + 4] | d[p + 5] << 8, d[p + 6] | d[p + 7] << 8
+        w, h = d[p + 8] + 1 + (d[p + 9] << 8), d[p + 10] + 1 + (d[p + 11] << 8)
+        out.append((x, y, w, h))
+    return out
+
+
 def manifest_frames(data, path, images):
     """{sheet path: set of (x, y, w, h)} for one stage manifest (all its `stage` blocks)."""
     frames, sheets = {}, {}
@@ -81,19 +125,35 @@ def manifest_frames(data, path, images):
 
     objsheets = {}  # this stage block: object name -> sheets its subs may load (tools/atlas/object_sheets)
     whole3d = set()  # sheets sampled by Draw3DScene faces (lower-case paths)
+    fontglyphs = {}  # lower-case sheet path -> glyph rects of the fonts DrawText uses with it
+    prescaled = set()  # font sheets whose glyphs come pre-scaled (<sheet>_ps1.gif)
     for line in open(path):
         t = line.split()
         if t[0] == 'stage':
             sheets = {}
             objsheets = {}
             for k, v in object_sheets(data, int(t[1]), int(t[2]), t[3]).items():
-                if isinstance(k, tuple):  # (name, '3d'): Draw3DScene faces sample these sheets whole
+                if k == ('*', 'text'):  # pre-scaled glyphs (tools/font/prescale_font.py): the whole sheet
+                    for sheet in v['sheets']:
+                        ps = os.path.splitext(sheet)[0] + '_ps1.gif'
+                        if size(ps) is not None:
+                            H, W = size(ps)
+                            frames.setdefault(ps, set()).add((0, 0, W, H))
+                            prescaled.add(sheet.lower())
+                elif isinstance(k, tuple) and k[1] == 'font':  # DrawText: the fonts' glyphs on the object's sheets
+                    chars = text_chars(data, v[2])      # only those the disc language's texts use
+                    for sheet in v[0]:
+                        fontglyphs.setdefault(sheet.lower(), set()).update(r for f in v[1] for r in font_rects(data, f, chars))
+                elif isinstance(k, tuple):  # (name, '3d'): Draw3DScene faces sample these sheets whole
                     for p in v:
                         whole3d.add(p.lower())
                 else:
                     objsheets[k.replace(' ', '').lower()] = v
         elif t[0] == 'sheet':
             sheets[int(t[1])] = t[2]
+            if t[2].lower() not in prescaled:  # pre-scaled glyphs replace the original ones
+                for r in fontglyphs.get(t[2].lower(), ()):
+                    add_frame(int(t[1]), *r)
             # A 3D object's texture-sized sheet (<= 256x256, e.g. the title's clouds): all of it. Big sheets
             # (the menu's) rely on their frames; faces outside the atlas are counted at runtime
             # (g_ps1FaceTexMiss).
@@ -357,6 +417,8 @@ def main():
     cols = int(args[args.index('--cols') + 1]) if '--cols' in args else None
     feas = '--report' in args
     suffix = args[args.index('--suffix') + 1] if '--suffix' in args else ''
+    global LANG
+    LANG = args[args.index('--lang') + 1] if '--lang' in args else 'en'
     outdir = os.path.join(data, 'Sprites', 'Atlas')
     if not feas:
         os.makedirs(outdir, exist_ok=True)
