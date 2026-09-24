@@ -347,6 +347,25 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n) {
     }
 }
 
+void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n) {
+    if (g_ps1ChainSkipPrims || n <= 0 || wpp <= 0 || wpp > PS1_CHAIN_MAX_WORDS)
+        return;
+    runHook();
+    flushBatch();
+    int per = PS1_CHAIN_MAX_WORDS / wpp;
+    while (n > 0) {
+        int k = n < per ? n : per;
+        VarFragment *f = allocVar(wpp * k);
+        if (!f)
+            return;
+        memcpy(f->data, words, wpp * k * 4);
+        s_gpu->chain(*f);
+        words += wpp * k;
+        n -= k;
+    }
+    s_tpageValid = false;
+}
+
 void PS1ChainSprite(const psyqo::Prim::Sprite &s) {
     if (g_ps1ChainSkipPrims)
         return;

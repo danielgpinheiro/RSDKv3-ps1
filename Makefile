@@ -97,6 +97,8 @@ RSDKv3/Math.o RSDKv3/Math.dep: build/gen/trig_tables.inc
 ps1/mdec.o: CPPFLAGS += -O2
 # Renderer hot paths (tile bands, chain appends): speed over size (docs/28 3.6).
 ps1/render.o ps1/gpu_chain.o: CPPFLAGS += -O2
+# Script VM + collision (object logic): speed over size (user decision 2026-09-24: 60 fps, spend RAM).
+RSDKv3/Script.o RSDKv3/Object.o RSDKv3/Collision.o: CPPFLAGS += -O2
 
 # Cancel make's built-in `%: %.o` link rule: the extensionless libc shim headers
 # (ps1/libc/string, vector, ...) listed in .dep files must not be rebuilt from `string.o`.

@@ -56,6 +56,9 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n);
 // Bulk variable-size sprites (GP0 64h, colour 0x80): n sprites of 3 words each {xy, u|v<<8|clut<<16,
 // w|h<<16} in `words`, into exact-size fragments of <= 3 sprites (12 words). Keeps the draw order.
 void PS1ChainSpriteRawN(const uint32_t *words, int n);
+// Bulk raw GP0 primitives of `wpp` words each (e.g. 9 = textured quad), as many per fragment as fit in
+// 14 words. Textured polygons carry their own texpage: the tracked texpage state is invalidated.
+void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n);
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
 void PS1ChainQuad(const psyqo::Prim::TexturedQuad &q);         // note: quads carry their own texpage
 void PS1ChainRect(const psyqo::Prim::Rectangle &r);            // untextured; semi-trans uses the current texpage mode

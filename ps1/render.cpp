@@ -71,6 +71,8 @@ volatile uint32_t g_ps1LayerHbl       = 0; // CPU time of this frame's tile laye
 volatile uint32_t g_ps1StripBandCount = 0; // strip bands drawn this frame (profiling)
 volatile uint32_t g_ps1TileBandCount  = 0; // tile bands drawn this frame (profiling)
 volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
+volatile uint32_t g_ps1ProfSlot[4]    = {}; // this frame: hblanks per draw slot (layerID 0-3)
+volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped / partial quads or sprites (slow path)
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
 volatile uint32_t g_ps1DrawTodo       = 0; // draw calls of later steps (ink effects, faces, text...), skipped
@@ -184,6 +186,8 @@ static void PS1FrameStart(bool clear)
     g_ps1LayerPrims  = 0;
     g_ps1LayerHbl    = 0;
     for (int i = 0; i < 5; ++i) g_ps1ProfLayer[i] = 0;
+    for (int i = 0; i < 4; ++i) g_ps1ProfSlot[i] = 0;
+    g_ps1TileFlipped = 0;
     g_ps1StripBandCount = 0;
     g_ps1TileBandCount  = 0;
     s_fadePending = false;
@@ -565,8 +569,14 @@ static void PS1DrawLayer(int layerID)
 
 // upstream DrawStageGFX (SW path): water position, then layers and draw lists in upstream order
 // (list 7 before 6), then the full-screen fade rectangle.
+volatile uint32_t g_ps1ProfWaitHbl = 0; // profiling (g_ps1DebugDrawMask bit 2): time waiting for the previous chain
 void DrawStageGFX()
 {
+    if (g_ps1DebugDrawMask & 4) { // profiling: draw with the GPU/DMA idle (bus contention test)
+        uint32_t t0 = PS1Hblanks();
+        PS1GpuImmediate();
+        g_ps1ProfWaitHbl = PS1HblanksSince(t0);
+    }
     PS1FrameStart(true);
     waterDrawPos = waterLevel - yScrollOffset;
     if (waterDrawPos < 0)
@@ -762,6 +772,57 @@ static void PS1DrawTilePiece(int sx, int sy, int tileIndex, int ty0, int h, int 
 
 // Screen lines [sy, sy + h) showing layer lines [ly, ly + h) (inside one tile row) scrolled to chunkX.
 // Bands touching a screen edge are extended to whole tile rows (the GPU clips).
+// Raw textured quad(s) for rows [ty0, ty0 + h) of a tile at screen (sx, sy), flipped per `dir`: GP0 2Ch,
+// corners A B C D (top-left, top-right, bottom-left, bottom-right), UVs running backwards for flips
+// (the Nexus PS1DrawTilePiece math: u -1 / 256 addressed from the neighbouring 8-bit page; a v edge
+// past the page gets the last row as its own constant-v strip). Returns words written (9 or 18).
+static int PS1TileQuadWords(uint32_t *w, int sx, int sy, int tileIndex, int ty0, int h, int dir)
+{
+    int page = tileIndex >> 8, pt = tileIndex & 0xFF;
+    int u = (pt & 0xF) << 4, v = (pt >> 4) << 4;
+    int pageX = PS1_TILE_PAGE_X + 2 * (page & 1), pageY = PS1_TILE_PAGE_Y + (page >> 1);
+    int uL = (dir & FLIP_X) ? u + 15 : u;
+    int uR = (dir & FLIP_X) ? u - 1 : u + 16;
+    int dv = (dir & FLIP_Y) ? -1 : 1;
+    int vT = (dir & FLIP_Y) ? v + 15 - ty0 : v + ty0;
+    if (uR < 0)
+        pageX -= 1, uL += 128, uR += 128;
+    else if (uR > 255)
+        pageX += 1, uL -= 128, uR -= 128;
+    uint32_t tpage = (uint32_t)(pageX | (pageY << 4) | (1 << 7)); // GP0 E1h bits: page X / Y, 8-bit
+    uint32_t clut  = s_tileClutWord;
+    auto quad = [&](uint32_t *q, int y, int hh, int v0, int v1) {
+        uint32_t xl = (uint16_t)sx, xr = (uint16_t)(sx + TILE_SIZE);
+        uint32_t yt = (uint32_t)(uint16_t)y << 16, yb = (uint32_t)(uint16_t)(y + hh) << 16;
+        q[0] = 0x2C808080;
+        q[1] = yt | xl;
+        q[2] = clut | ((uint32_t)(uint8_t)v0 << 8) | (uint8_t)uL;
+        q[3] = yt | xr;
+        q[4] = (tpage << 16) | ((uint32_t)(uint8_t)v0 << 8) | (uint8_t)uR;
+        q[5] = yb | xl;
+        q[6] = ((uint32_t)(uint8_t)v1 << 8) | (uint8_t)uL;
+        q[7] = yb | xr;
+        q[8] = ((uint32_t)(uint8_t)v1 << 8) | (uint8_t)uR;
+    };
+    int vB = vT + h * dv;
+    if (vB < 0 || vB > 255) {
+        int vLast = vT + (h - 1) * dv;
+        int n     = 0;
+        if (h > 1) {
+            quad(w, sy, h - 1, vT, vLast);
+            n = 9;
+        }
+        quad(w + n, sy + h - 1, 1, vLast, vLast);
+        return n + 9;
+    }
+    quad(w, sy, h, vT, vB);
+    return 9;
+}
+
+// Screen lines [sy, sy + h) showing layer lines [ly, ly + h) (inside one tile row) scrolled to chunkX.
+// Bands touching a screen edge are extended to whole tile rows (the GPU clips). Tiles of one band never
+// overlap, so they are grouped: whole unflipped tiles per texture page (texpage + bulk 16x16 sprites),
+// then flipped / partial tiles as raw quads (each carries its texpage).
 static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
 {
     g_ps1TileBandCount = g_ps1TileBandCount + 1;
@@ -777,14 +838,14 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     uint32_t yWord         = (uint32_t)(uint16_t)sy << 16;
     uint32_t clutWord      = s_tileClutWord;
     bool whole             = h == TILE_SIZE;
-    bool chain             = !(g_ps1DebugDrawMask & 2);
-    int curPage            = -1;
     int prims              = 0;
     uint16_t rowBit        = 1 << ((tileRow >> 3) * 2 + (above ? 1 : 0));
-    uint32_t runXY[24], runTex[24]; // one band: <= 21 tiles across 320 px
-    int run = 0;
-    int px  = chunkX & ~0xF;
-    int sx  = -(chunkX & 0xF);
+    uint32_t pageXY[4][24], pageTex[4][24]; // one band: <= 21 tiles across 320 px
+    int pageN[4] = { 0, 0, 0, 0 };
+    uint32_t quads[24 * 18];
+    int quadWords = 0, quadN = 0;
+    int px = chunkX & ~0xF;
+    int sx = -(chunkX & 0xF);
     // Chunk by chunk: one chunk-row lookup, then its tiles' packed visuals read in sequence.
     while (sx < SCREEN_XSIZE) {
         int first = (px & 0x7F) >> 4, count = 8 - first;
@@ -799,26 +860,14 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
                 ++prims;
                 int dir       = (tv >> PS1_TV_DIR_SHIFT) & 3;
                 int tileIndex = tv & PS1_TV_INDEX;
-                if (whole && dir == FLIP_NONE) { // collected, chained in bulk per texture page
-                    int page = tileIndex >> 8, pt = tileIndex & 0xFF;
-                    if (page != curPage) {
-                        if (chain) {
-                            PS1ChainSprite16RawN(runXY, runTex, run);
-                            PS1ChainTPage(s_tileTPage[page]);
-                        }
-                        run     = 0;
-                        curPage = page;
-                    }
-                    runXY[run]    = yWord | (uint16_t)x;
-                    runTex[run++] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
+                if (whole && dir == FLIP_NONE) {
+                    int page = tileIndex >> 8, pt = tileIndex & 0xFF, n = pageN[page]++;
+                    pageXY[page][n]  = yWord | (uint16_t)x;
+                    pageTex[page][n] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
                 }
                 else {
-                    if (chain) {
-                        PS1ChainSprite16RawN(runXY, runTex, run);
-                        PS1DrawTilePiece(x, sy, tileIndex, ty0, h, dir);
-                    }
-                    run     = 0;
-                    curPage = -1;
+                    quadWords += PS1TileQuadWords(&quads[quadWords], x, sy, tileIndex, ty0, h, dir);
+                    ++quadN;
                 }
             }
         }
@@ -827,8 +876,15 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
         if (px >= fullW)
             px -= fullW;
     }
-    if (chain)
-        PS1ChainSprite16RawN(runXY, runTex, run);
+    g_ps1TileFlipped = g_ps1TileFlipped + quadN;
+    if (!(g_ps1DebugDrawMask & 2)) {
+        for (int p = 0; p < 4; ++p)
+            if (pageN[p]) {
+                PS1ChainTPage(s_tileTPage[p]);
+                PS1ChainSprite16RawN(pageXY[p], pageTex[p], pageN[p]);
+            }
+        PS1ChainPrimsRawN(quads, 9, quadWords / 9);
+    }
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
 }
 
@@ -921,15 +977,19 @@ void PS1LoadBGStrips(const char *folder, int player)
     g_ps1StripBytes   = bytes;
 }
 
-// Strip sprites of one region, grouped by piece with a counting sort (pass 1 counts each piece's runs,
-// pass 2 writes them at the piece's offset), then chained piece by piece: one texpage + bulk sprites.
-// {xy, u|v<<8|clut<<16, w|h<<16} words; a band spans <= 3 runs, so 768 runs cover 240 bands (9 KB).
+// Strip sprites of one region, grouped by piece: one walk writes the runs in band order with their
+// piece, a scatter pass groups them by piece (counting sort), then each piece is chained as one texpage
+// + bulk sprites. {xy, u|v<<8|clut<<16, w|h<<16} words; a band spans <= 3 runs, so 768 runs cover 240
+// bands (2 x 9 KB: user decision 2026-09-24, 60 fps over RAM).
 #define PS1_STRIP_RUNS 768
-static uint32_t s_stripRuns[PS1_STRIP_RUNS * 3];
+static uint32_t s_stripRuns[PS1_STRIP_RUNS * 3];   // grouped by piece
+static uint32_t s_stripWalk[PS1_STRIP_RUNS * 3];   // band order
+static uint8_t s_stripWalkPiece[PS1_STRIP_RUNS];
+static int s_stripWalkCount = 0;
 
 // Walks a band of lines [ly, ly + h) in a strip region scrolled to chunkX (period from chunkX % period
-// across 320 px; a run <= 256 texels = one piece = one page). pos == nullptr: count runs per piece.
-static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int chunkX, uint32_t clut, int *count, int *pos)
+// across 320 px; a run <= 256 texels = one piece = one page): runs appended in band order, counted per piece.
+static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int chunkX, uint32_t clut, int *count)
 {
     int row = ly - r.line0;
     int t   = chunkX % r.period;
@@ -940,14 +1000,15 @@ static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int
         int run = r.w[k] - u;
         if (run > SCREEN_XSIZE - x)
             run = SCREEN_XSIZE - x;
-        if (!pos) {
+        int n = s_stripWalkCount;
+        if (n < PS1_STRIP_RUNS) {
+            uint32_t *w         = &s_stripWalk[n * 3];
+            w[0]                = (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)sy << 16);
+            w[1]                = (uint32_t)u | ((uint32_t)((r.y[k] & 0xFF) + row) << 8) | clut;
+            w[2]                = (uint32_t)run | ((uint32_t)h << 16);
+            s_stripWalkPiece[n] = (uint8_t)k;
+            s_stripWalkCount    = n + 1;
             ++count[k];
-        }
-        else if (pos[k] < PS1_STRIP_RUNS) {
-            uint32_t *w = &s_stripRuns[pos[k]++ * 3];
-            w[0]        = (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)sy << 16);
-            w[1]        = (uint32_t)u | ((uint32_t)((r.y[k] & 0xFF) + row) << 8) | clut;
-            w[2]        = (uint32_t)run | ((uint32_t)h << 16);
         }
         x += run;
         t += run;
@@ -1051,6 +1112,7 @@ void DrawHLineScrollLayer(int layerID)
         }
         g_ps1LayerHbl     = g_ps1LayerHbl + PS1HblanksSince(t0);
         g_ps1ProfLayer[0] = g_ps1ProfLayer[0] + PS1HblanksSince(t0);
+        g_ps1ProfSlot[layerID & 3] = PS1HblanksSince(t0);
         return;
     }
     for (int y = 0; y < SCREEN_YSIZE; ++y) {
@@ -1121,14 +1183,18 @@ void DrawHLineScrollLayer(int layerID)
         const PS1StripRegion &r        = s_strips[region];
         int count[PS1_STRIP_PIECES]    = {};
         int pos[PS1_STRIP_PIECES], total = 0;
+        s_stripWalkCount = 0;
         for (int b = i; b < j; ++b)
-            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count, nullptr);
+            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count);
         for (int k = 0; k < r.pieces; ++k) {
             pos[k] = total;
             total += count[k];
         }
-        for (int b = i; b < j; ++b)
-            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count, pos);
+        for (int q = 0; q < s_stripWalkCount; ++q) { // scatter: group by piece, band order kept
+            uint32_t *d = &s_stripRuns[pos[s_stripWalkPiece[q]]++ * 3];
+            uint32_t *w = &s_stripWalk[q * 3];
+            d[0] = w[0], d[1] = w[1], d[2] = w[2];
+        }
         for (int k = 0, start = 0; k < r.pieces; start += count[k++]) {
             int n = count[k];
             if (start + n > PS1_STRIP_RUNS)
