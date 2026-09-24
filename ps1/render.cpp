@@ -459,19 +459,29 @@ volatile uint32_t g_ps1BankMask    = 0; // banks used by the last frame (bit per
 volatile uint32_t g_ps1BankReplays = 0; // regions drawn again with their own bank (total)
 
 // Per-line palette banks (upstream SetActivePalette / gfxLineBuffer; user decision 2026-09-24: replay
-// per region). The frame was drawn with line 0's bank; every further run of lines with another bank
+// per region). The frame's first pass gets the bank covering the most lines; every further run of lines with another bank
 // gets its bank's CLUT rows (same VRAM rows), a drawing area of those lines, a fresh base (clear
 // colour, or the last frame in a repeated frame) and a replay of the frame's primitives.
+static int s_baseBank = 0; // bank of the frame's first pass (the one covering the most lines)
+
 static void PS1DrawBankRegions(psyqo::Color clear)
 {
     uint32_t *sceneEnd = PS1ChainMark();
-    int regions = 1, y0 = 0;
-    uint32_t mask = 1u << gfxLineBuffer[0];
+    int lines[PALETTE_COUNT] = {};
+    for (int y = 0; y < SCREEN_YSIZE; ++y) lines[gfxLineBuffer[y] & (PALETTE_COUNT - 1)]++;
+    s_baseBank = gfxLineBuffer[0] & (PALETTE_COUNT - 1);
+    for (int b = 0; b < PALETTE_COUNT; ++b)
+        if (lines[b] > lines[s_baseBank])
+            s_baseBank = b; // replays then cover at most half the screen
+    int regions = 0, y0 = 0;
+    uint32_t mask = 0;
     for (int y = 1; y <= SCREEN_YSIZE; ++y) {
         if (y < SCREEN_YSIZE && gfxLineBuffer[y] == gfxLineBuffer[y0])
             continue;
-        if (y0 > 0) { // regions after the first: the frame again, with this region's bank
-            int bank  = gfxLineBuffer[y0];
+        int bank = gfxLineBuffer[y0] & (PALETTE_COUNT - 1);
+        ++regions;
+        mask |= 1u << bank;
+        if (bank != s_baseBank) { // this run of lines again, with its own bank
             int first = s_palChunkCount;
             PS1ReservePaletteRows();
             PS1FillPalette(bank, first);
@@ -483,12 +493,8 @@ static void PS1DrawBankRegions(psyqo::Color clear)
                 PS1ChainCopyLastFrameLines(y0, y);
             PS1ChainReplayLines(s_sceneMark, sceneEnd, y0, y);
             g_ps1BankReplays = g_ps1BankReplays + 1;
-            mask |= 1u << bank;
         }
-        if (y < SCREEN_YSIZE) {
-            ++regions;
-            y0 = y;
-        }
+        y0 = y;
     }
     if (regions > 1) {
         PS1ChainDrawAreaReset();
@@ -513,7 +519,7 @@ void FlipScreen()
     PS1DrawBankRegions(clear);
     int end         = s_palChunkCount; // the regions filled their own chunks: refill only the frame-start rows
     s_palChunkCount = frameChunks;
-    PS1FillPalette(gfxLineBuffer[0]);
+    PS1FillPalette(s_baseBank); // the first pass is drawn with the base bank
     s_palChunkCount = end;
     if (s_fadePending) {
         g_ps1ClutFades = g_ps1ClutFades + 1;
@@ -844,6 +850,9 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     uint16_t rowBit        = 1 << ((tileRow >> 3) * 2 + (above ? 1 : 0));
     uint32_t pageXY[4][24], pageTex[4][24]; // one band: <= 21 tiles across 320 px
     int pageN[4] = { 0, 0, 0, 0 };
+    uint32_t partial[4][24 * 3]; // unflipped partial rows: variable sprites {xy, uv|clut, wh} per page
+    int partialN[4] = { 0, 0, 0, 0 };
+    uint32_t whWord = (uint32_t)TILE_SIZE | ((uint32_t)h << 16);
     uint32_t quads[24 * 18];
     int quadWords = 0, quadN = 0;
     int px = chunkX & ~0xF;
@@ -862,10 +871,19 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
                 ++prims;
                 int dir       = (tv >> PS1_TV_DIR_SHIFT) & 3;
                 int tileIndex = tv & PS1_TV_INDEX;
-                if (whole && dir == FLIP_NONE) {
-                    int page = tileIndex >> 8, pt = tileIndex & 0xFF, n = pageN[page]++;
-                    pageXY[page][n]  = yWord | (uint16_t)x;
-                    pageTex[page][n] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
+                if (dir == FLIP_NONE) {
+                    int page = tileIndex >> 8, pt = tileIndex & 0xFF;
+                    if (whole) {
+                        int n            = pageN[page]++;
+                        pageXY[page][n]  = yWord | (uint16_t)x;
+                        pageTex[page][n] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
+                    }
+                    else { // rows [ty0, ty0 + h): a sprite (4 words) instead of a quad (9)
+                        uint32_t *w = &partial[page][partialN[page]++ * 3];
+                        w[0]        = yWord | (uint16_t)x;
+                        w[1]        = (uint32_t)(((pt & 0xF) << 4) | ((((pt & 0xF0)) + ty0) << 8)) | clutWord;
+                        w[2]        = whWord;
+                    }
                 }
                 else {
                     quadWords += PS1TileQuadWords(&quads[quadWords], x, sy, tileIndex, ty0, h, dir);
@@ -881,9 +899,10 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     g_ps1TileFlipped = g_ps1TileFlipped + quadN;
     if (!(g_ps1DebugDrawMask & 2)) {
         for (int p = 0; p < 4; ++p)
-            if (pageN[p]) {
+            if (pageN[p] || partialN[p]) {
                 PS1ChainTPage(s_tileTPage[p]);
                 PS1ChainSprite16RawN(pageXY[p], pageTex[p], pageN[p]);
+                PS1ChainSpriteRawN(partial[p], partialN[p]);
             }
         PS1ChainPrimsRawN(quads, 9, quadWords / 9);
     }

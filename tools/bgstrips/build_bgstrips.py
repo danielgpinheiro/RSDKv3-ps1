@@ -9,7 +9,8 @@ layer lines into VRAM the stage's sprite atlas leaves free, as 8-bit rows of one
 the layer (the visual plane of its draw slot and tile flips baked in, index 0 = transparent), so a
 band of any height costs 1-3 sprites.
 
-Lines are chosen per 16-line tile row: rows with thin runs (lineScroll runs < 16 lines) first, then
+Lines are chosen per 16-line tile row: rows with thin runs (lineScroll runs < 16 lines, or lines on a
+deforming hParallax entry: a new X every line) first, then
 the rows nearest to them, until the free VRAM is used. Rows left out are drawn with tiles.
 
 Inputs (v3, as upstream Scene.cpp reads them): Backgrounds.bin (u8 layerCount, hParallax and
@@ -72,9 +73,13 @@ def load_backgrounds(sdir):
         j += 1
         return v
     lc = rb()
-    for _ in range(2):  # hParallax, vParallax: 4-byte entries
+    deform = []  # hParallax entry -> deform flag (per-line ripple: every line gets its own X scroll)
+    for pl in range(2):  # hParallax, vParallax: 4-byte entries (factor u16, speed, deform)
         n = rb()
-        j += 4 * n
+        for _ in range(n):
+            if pl == 0:
+                deform.append(b[j + 3] != 0)
+            j += 4
     layers = {}
     for L in range(1, lc + 1):
         xs, ys, ty = rb(), rb(), rb()
@@ -91,7 +96,7 @@ def load_backgrounds(sdir):
                 ls.append(c)
         ls = (ls + [0] * SCROLL_MAX)[:SCROLL_MAX]
         grid = [[(rb() << 8) | rb() for _ in range(xs)] for _ in range(ys)]
-        layers[L] = dict(xsize=xs, ysize=min(ys, SCROLL_MAX // 128), type=ty, lineScroll=ls, tiles=grid)
+        layers[L] = dict(xsize=xs, ysize=min(ys, SCROLL_MAX // 128), type=ty, lineScroll=ls, tiles=grid, deform=deform)
     return layers
 
 
@@ -196,6 +201,9 @@ def build_stage(data, name, atlas_suffix):
                     if j - i < 16:
                         thin.update(range(i >> 4, ((j - 1) >> 4) + 1))
                     i = j
+                # Lines on a deforming parallax entry get a new X every line (water ripples): as thin.
+                df = L['deform']
+                thin.update(y >> 4 for y in range(full_h) if ls[y] < len(df) and df[ls[y]])
                 jobs.append(dict(layer=li, plane=key[1], L=L, period=p, pieces=pieces, rows=full_h >> 4, thin=thin))
 
     # Select rows: thin ones first, then nearest to a thin row, while pieces fit.

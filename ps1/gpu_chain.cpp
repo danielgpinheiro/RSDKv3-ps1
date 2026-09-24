@@ -3,6 +3,8 @@
  */
 #include "gpu_chain.hh"
 
+#include <psyqo/alloc.h>
+
 #include <string.h>
 
 #include <new>
@@ -12,9 +14,10 @@
 #include <psyqo/primitives/control.hh>
 #include <psyqo/primitives/misc.hh>
 
-// Arena per frame parity: 24 KB each (sized from the measured high-water mark, see
-// docs/20). A frame's arena is being DMA'd while the next frame builds in the other one.
-#define PS1_CHAIN_ARENA_WORDS (24 * 1024 / 4)
+// Arena per frame parity. A frame's arena is being DMA'd while the next frame builds in the other one.
+// Sonic CD (docs/28 3.6): 64 KB each, on the heap, time-shared with the CD read-ahead windows (user
+// decision 2026-09-24): released at the start of a load (PS1ChainSuspend), allocated again at its end.
+#define PS1_CHAIN_ARENA_WORDS (64 * 1024 / 4) // Tidal Tempest underwater frames (flipped-tile quads + region replay) reach ~12.3K words
 // Every chained fragment is kept <= 14 words (psyqo GPU::c_chainThreshold / 4). psyqo links
 // bigger fragments with bit 23 set so the linked-list DMA stops, then its DMA IRQ reads DMA2
 // MADR to find and send the big node by hand. Real hardware leaves MADR at the failing link,
@@ -64,7 +67,7 @@ struct VarFragment {
     size_t getActualFragmentSize() const { return words; }
 };
 
-alignas(4) uint32_t s_arena[2][PS1_CHAIN_ARENA_WORDS];
+uint32_t *s_arenaMem = nullptr; // 2 x PS1_CHAIN_ARENA_WORDS (heap), nullptr while suspended
 void (*s_hook)() = nullptr;
 
 inline void runHook() {
@@ -132,9 +135,22 @@ void chainSimple(const Prim &prim) {
 
 } // namespace
 
+volatile uint32_t g_ps1ChainArenaFail = 0; // frames without an arena (heap full): nothing drawn
+volatile uint32_t g_ps1ChainSuspends  = 0; // arenas released for a load
+static bool s_suspended = false;
+
 void PS1ChainBegin(psyqo::GPU &gpu) {
-    s_gpu        = &gpu;
-    s_base       = s_arena[gpu.getParity()];
+    s_gpu = &gpu;
+    if (!s_arenaMem && !s_suspended)
+        s_arenaMem = (uint32_t *)psyqo_malloc(2 * PS1_CHAIN_ARENA_WORDS * 4);
+    if (!s_arenaMem) {
+        g_ps1ChainArenaFail = g_ps1ChainArenaFail + 1;
+        s_base = s_cur = s_end = nullptr;
+        s_batch  = nullptr;
+        s_sbatch = nullptr;
+        return;
+    }
+    s_base       = s_arenaMem + (gpu.getParity() ? PS1_CHAIN_ARENA_WORDS : 0);
     s_cur        = s_base;
     s_end        = s_base + PS1_CHAIN_ARENA_WORDS;
     s_batch      = nullptr;
@@ -150,6 +166,28 @@ void PS1ChainEnd() {
     g_ps1ChainLastWords = used;
     if (used > g_ps1ChainHighWater)
         g_ps1ChainHighWater = used;
+}
+
+void PS1ChainSuspend() {
+    if (!s_arenaMem || s_suspended)
+        return;
+    flushBatch();
+    if (s_cur != s_base) // this frame already chained something psyqo points at: keep the arenas
+        return;
+    PS1GpuImmediate(); // the previous frame's chain may still be DMA'd from the other arena
+    psyqo_free(s_arenaMem);
+    s_arenaMem  = nullptr;
+    s_base = s_cur = s_end = nullptr;
+    s_suspended = true;
+    g_ps1ChainSuspends = g_ps1ChainSuspends + 1;
+}
+
+void PS1ChainResume() {
+    if (!s_suspended)
+        return;
+    s_suspended = false;
+    if (s_gpu)
+        PS1ChainBegin(*s_gpu); // the current frame's chain starts over in the new arena
 }
 
 void PS1GpuImmediate() {

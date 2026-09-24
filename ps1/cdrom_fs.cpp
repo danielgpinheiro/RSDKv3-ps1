@@ -49,6 +49,11 @@ static uint32_t s_winClock    = 0;
 static uint32_t s_volumeEnd   = 0; // sectors in the volume (PVD): read-ahead never goes past it
 volatile uint32_t g_ps1FsWindowHits  = 0; // buffered reads served from a window (GDB)
 volatile uint32_t g_ps1FsWindowFills = 0; // window misses (one CD request each)
+volatile uint32_t g_ps1FsFallbackReads = 0; // reads through the 1-sector fallback (no heap for a window)
+// When the heap can't hold a window (outside a load the renderer's chain arenas live there too,
+// ps1/gpu_chain), reads go through this one-sector buffer: slower, never short.
+static uint8_t s_fallbackBuf[2048];
+static Window s_fallback = {s_fallbackBuf, 0, 0, 0};
 
 /* findFile reads the volume descriptor and every directory on the path for each fopen; the disc
  * is read-only, so those sectors are cached (LRU) instead of costing a blocking CD request each. */
@@ -303,6 +308,7 @@ void PS1FsReleaseWindows() {
         free(w.buf);
         w = Window{};
     }
+    s_fallback.count = 0;
 }
 
 bool PS1LoadingActive(); // loading.cpp
@@ -346,8 +352,17 @@ static Window *windowFor(uint32_t sector) {
         if (w.age < victim->age)
             victim = &w;
     }
-    if (!victim->buf && !(victim->buf = (uint8_t *)malloc(WINDOW_SECTORS * ISO_SECTOR)))
-        return nullptr;
+    if (!victim->buf && !(victim->buf = (uint8_t *)malloc(WINDOW_SECTORS * ISO_SECTOR))) {
+        if (s_fallback.count && sector == s_fallback.lba)
+            return &s_fallback;
+        s_fallback.count = 0;
+        if (!cdRead(sector, 1, s_fallback.buf))
+            return nullptr;
+        s_fallback.lba   = sector;
+        s_fallback.count = 1;
+        g_ps1FsFallbackReads = g_ps1FsFallbackReads + 1;
+        return &s_fallback;
+    }
     uint32_t count = s_volumeEnd > sector ? s_volumeEnd - sector : 1;
     if (count > WINDOW_SECTORS)
         count = WINDOW_SECTORS;

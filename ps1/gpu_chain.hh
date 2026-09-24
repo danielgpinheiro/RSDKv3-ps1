@@ -31,6 +31,10 @@ class GPU;
 void PS1ChainBegin(psyqo::GPU &gpu); // start of a frame: select the arena for this parity
 void PS1ChainEnd();                  // end of a frame: close the open tile batch
 void PS1GpuImmediate();              // wait for the in-flight chain before an immediate GPU op
+// The arenas live on the heap, time-shared with the CD read-ahead windows: a load (ps1/loading)
+// releases them (only if this frame chained nothing yet) and gets them back at its end.
+void PS1ChainSuspend();
+void PS1ChainResume();
 
 // FastFill the next draw buffer. Returns the chained primitive (its colour may still be
 // changed until the frame ends: the chain is sent after frame() returns), or nullptr.

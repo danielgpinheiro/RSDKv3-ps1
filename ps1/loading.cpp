@@ -144,6 +144,7 @@ void PS1LoadingBegin() {
     if (s_depth++ > 0)
         return;
     g_ps1LoadingLoads = g_ps1LoadingLoads + 1;
+    PS1ChainSuspend(); // the chain arenas give their heap to the CD read-ahead windows (ps1/gpu_chain)
     s_start = g_ps1GPU->now();
     s_shown = false;
     s_frame = 0;
@@ -157,6 +158,7 @@ void PS1LoadingEnd() {
         return;
     g_ps1GPU->cancelTimer(s_timer);
     PS1FsReleaseWindows(); // the read-ahead windows live for one load
+    PS1ChainResume();      // and the chain arenas come back
     g_ps1LoadingLastUs = g_ps1GPU->now() - s_start;
     uintptr_t top = (uintptr_t)psyqo_heap_end();
     if (top < (uintptr_t)&__heap_start)
