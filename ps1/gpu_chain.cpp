@@ -55,6 +55,15 @@ struct RawFragment {
     size_t getActualFragmentSize() const { return words; }
 };
 
+// A replayed fragment of exactly its size: the size field sits before `head` (psyqo's chain() only
+// reads &head and getActualFragmentSize()), so a copy takes 2 + n arena words instead of 16.
+struct VarFragment {
+    unsigned words;
+    uintptr_t head;
+    uint32_t data[PS1_CHAIN_MAX_WORDS]; // only `words` of them are allocated
+    size_t getActualFragmentSize() const { return words; }
+};
+
 alignas(4) uint32_t s_arena[2][PS1_CHAIN_ARENA_WORDS];
 void (*s_hook)() = nullptr;
 
@@ -73,6 +82,17 @@ TileBatch *s_batch  = nullptr; // open tile batch (not yet chained)
 SpriteBatch *s_sbatch = nullptr; // open sprite batch (not yet chained); at most one batch is open
 uint16_t s_lastTPage = 0xFFFF;  // raw TPageAttr of the last chained TPage (0xFFFF = unknown)
 bool s_tpageValid    = false;
+
+VarFragment *allocVar(unsigned n) {
+    if (!s_cur || s_cur + 2 + n > s_end) {
+        g_ps1ChainOverflow = g_ps1ChainOverflow + 1;
+        return nullptr;
+    }
+    auto *f = reinterpret_cast<VarFragment *>(s_cur);
+    s_cur += 2 + n;
+    f->words = n;
+    return f;
+}
 
 template <typename T>
 T *allocRaw() {
@@ -312,11 +332,77 @@ int PS1ChainReplay(uint32_t *from, uint32_t *to) {
         unsigned n    = head >> 24;
         uint32_t *next = reinterpret_cast<uint32_t *>(0x80000000u | (head & 0xffffff));
         if (n && n <= PS1_CHAIN_MAX_WORDS && (p[1] >> 24) != 0xA0) { // skip CPU->VRAM uploads (CLUT rows)
-            auto *f = allocRaw<RawFragment>();
+            auto *f = allocVar(n);
             if (!f)
                 break;
             memcpy(f->data, p + 1, n * 4);
-            f->words = n;
+            s_gpu->chain(*f);
+            words += n + 1;
+        }
+        p = next;
+    }
+    g_ps1ChainReplayWords = g_ps1ChainReplayWords + words;
+    s_tpageValid = false;
+    return words;
+}
+
+// Screen Y extent of the GP0 packets in n words (psx-spx "GPU Render Polygon / Rectangle Commands").
+// Returns false when the words hold no drawing packet (state commands only): always replayed.
+static bool packetsYRange(const uint32_t *w, unsigned n, int &ymin, int &ymax) {
+    bool drawn = false;
+    ymin = 0x7FFF, ymax = -0x8000;
+    auto yOf = [](uint32_t xy) { return (int)(int16_t)(xy >> 16); };
+    unsigned i = 0;
+    while (i < n) {
+        uint32_t cmd = w[i] >> 24;
+        if (cmd >= 0x20 && cmd < 0x40) { // polygon: 3/4 vertices, [color], xy, [uv]
+            bool quad = cmd & 0x08, tex = cmd & 0x04, gouraud = cmd & 0x10;
+            unsigned verts = quad ? 4 : 3, k = i + 1;
+            for (unsigned v = 0; v < verts && k < n; ++v) {
+                if (v && gouraud)
+                    ++k; // vertex colour
+                int y = yOf(w[k++]);
+                ymin = y < ymin ? y : ymin;
+                ymax = y > ymax ? y : ymax;
+                if (tex)
+                    ++k;
+            }
+            drawn = true;
+            i = k;
+        } else if (cmd >= 0x60 && cmd < 0x80) { // rectangle: color, xy, [uv], [wh]
+            bool tex = cmd & 0x04;
+            unsigned size = (cmd >> 3) & 3, k = i + 1;
+            int y = yOf(w[k++]);
+            if (tex)
+                ++k;
+            int h = size == 0 ? (k < n ? (int)(w[k++] >> 16) : 0) : size == 1 ? 1 : size == 2 ? 8 : 16;
+            ymin = y < ymin ? y : ymin;
+            ymax = y + h - 1 > ymax ? y + h - 1 : ymax;
+            drawn = true;
+            i = k;
+        } else {
+            return drawn ? true : false; // state / other packets end the scan (kept)
+        }
+    }
+    return drawn;
+}
+
+int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
+    flushBatch();
+    int words = 0;
+    uint32_t *p = from;
+    for (int guard = 0; p && p != to && p >= s_base && p < s_end && guard < 4096; ++guard) {
+        uint32_t head = *p;
+        unsigned n    = head >> 24;
+        uint32_t *next = reinterpret_cast<uint32_t *>(0x80000000u | (head & 0xffffff));
+        int ymin, ymax;
+        bool keep = n && n <= PS1_CHAIN_MAX_WORDS && (p[1] >> 24) != 0xA0 // not a CPU->VRAM upload (CLUT rows)
+                    && (!packetsYRange(p + 1, n, ymin, ymax) || (ymax >= y0 && ymin < y1));
+        if (keep) {
+            auto *f = allocVar(n);
+            if (!f)
+                break;
+            memcpy(f->data, p + 1, n * 4);
             s_gpu->chain(*f);
             words += n + 1;
         }
@@ -338,6 +424,21 @@ void PS1ChainDrawArea(int x0, int y0, int x1, int y1) {
 }
 
 void PS1ChainDrawAreaReset() { PS1ChainDrawArea(0, 0, 320, 240); }
+
+void PS1ChainFillLines(int y0, int y1, uint8_t r, uint8_t g, uint8_t b) {
+    psyqo::Prim::FastFill f(psyqo::Color{{.r = r, .g = g, .b = b}});
+    f.rect = psyqo::Rect{psyqo::Vertex{{.x = 0, .y = (int16_t)(chainBufferY() + y0)}}, psyqo::Vertex{{.w = 320, .h = (int16_t)(y1 - y0)}}};
+    chainSimple(f);
+}
+
+void PS1ChainCopyLastFrameLines(int y0, int y1) {
+    int16_t by = chainBufferY();
+    VRAMCopy c;
+    c.dst  = psyqo::Vertex{{.x = 0, .y = (int16_t)(by + y0)}};
+    c.src  = psyqo::Vertex{{.x = 0, .y = (int16_t)((by ? 0 : 256) + y0)}};
+    c.size = psyqo::Vertex{{.w = 320, .h = (int16_t)(y1 - y0)}};
+    chainSimple(c);
+}
 
 void PS1ChainMaskControl(bool forceSet, bool test) {
     chainSimple(psyqo::Prim::MaskControl(forceSet ? psyqo::Prim::MaskControl::ForceSet : psyqo::Prim::MaskControl::FromSource,

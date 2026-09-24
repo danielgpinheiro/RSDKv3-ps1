@@ -107,9 +107,9 @@ static int s_fadeR, s_fadeG, s_fadeB, s_fadeA;
 static psyqo::Prim::FastFill *s_clearPrim = nullptr;
 volatile uint32_t g_ps1ClutFades = 0; // frames whose fade went into the CLUTs (exact)
 
-static void PS1BuildPalette()
+static void PS1BuildPalette(int bank)
 {
-    const PaletteEntry *pal = fullPalette32[gfxLineBuffer[0]]; // bank of line 0 (per-line banks: 3.4)
+    const PaletteEntry *pal = fullPalette32[bank];
     s_pal[0]                = 0x0000;                          // index 0 = transparent (tiles and sprites)
     if (s_fadePending) {
         int a = s_fadeA, na = 255 - a;
@@ -138,10 +138,25 @@ static void PS1ReserveRow(int src, int count, int16_t x, int16_t y)
     }
 }
 
-static void PS1FillPalette()
+// Fills chunks [first, s_palChunkCount) with `bank`'s palette.
+static void PS1FillPalette(int bank, int first = 0)
 {
-    PS1BuildPalette();
-    for (int i = 0; i < s_palChunkCount; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
+    PS1BuildPalette(bank);
+    for (int i = first; i < s_palChunkCount; ++i) memcpy(s_palChunks[i].dst, &s_pal[s_palChunks[i].src], s_palChunks[i].n * sizeof(uint16_t));
+}
+
+// Master + atlas 4-bit CLUT rows, chained here (filled by PS1FillPalette).
+static void PS1ReservePaletteRows()
+{
+    PS1ReserveRow(0, 256, PS1_CLUT_X, PS1_CLUT_Y);
+    for (int k = 0; k < g_ps1AtlasClutCount;) { // runs of adjacent CLUT slots in one VRAM row
+        int run = 1;
+        while (k + run < g_ps1AtlasClutCount && g_ps1AtlasCluts[k + run].y == g_ps1AtlasCluts[k].y
+               && g_ps1AtlasCluts[k + run].x == g_ps1AtlasCluts[k].x + 16 * run)
+            ++run;
+        PS1ReserveRow(256 + k * 16, run * 16, (int16_t)g_ps1AtlasCluts[k].x, (int16_t)g_ps1AtlasCluts[k].y);
+        k += run;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -150,6 +165,7 @@ static void PS1FillPalette()
 // object lists over the last image, like PC's persistent framebuffer) repeats the last frame first.
 
 static bool s_chainOpen  = false;
+static uint32_t *s_sceneMark = nullptr; // chain position after the clear and the frame-start CLUT rows
 static bool s_frameOpen  = false;
 static bool s_frameFresh = false; // this frame started with a clear
 
@@ -177,19 +193,11 @@ static void PS1FrameStart(bool clear)
         g_ps1RepeatFrames = g_ps1RepeatFrames + 1;
     }
     s_palChunkCount = 0;
-    PS1BuildPalette();
-    PS1ReserveRow(0, 256, PS1_CLUT_X, PS1_CLUT_Y);
-    for (int k = 0; k < g_ps1AtlasClutCount;) { // runs of adjacent CLUT slots in one VRAM row
-        int run = 1;
-        while (k + run < g_ps1AtlasClutCount && g_ps1AtlasCluts[k + run].y == g_ps1AtlasCluts[k].y
-               && g_ps1AtlasCluts[k + run].x == g_ps1AtlasCluts[k].x + 16 * run)
-            ++run;
-        PS1ReserveRow(256 + k * 16, run * 16, (int16_t)g_ps1AtlasCluts[k].x, (int16_t)g_ps1AtlasCluts[k].y);
-        k += run;
-    }
-    PS1FillPalette();
+    PS1ReservePaletteRows();
+    PS1FillPalette(gfxLineBuffer[0]);
     PS1ChainFlushCache(); // the GPU caches CLUTs
     PS1ChainInvalidateTPage();
+    s_sceneMark = PS1ChainMark();
 }
 
 void PS1RenderBeginFrame(psyqo::GPU &gpu)
@@ -436,17 +444,71 @@ int InitRenderDevice()
 
 // PC converts the palette here, after drawing: the CLUT rows chained at the frame start get the
 // palette as it is now (a SetFade / palette change from a draw sub shows in the same frame).
+volatile uint32_t g_ps1BankRegions = 0; // palette-bank regions (runs of equal gfxLineBuffer) in the last frame
+volatile uint32_t g_ps1BankMask    = 0; // banks used by the last frame (bit per bank)
+volatile uint32_t g_ps1BankReplays = 0; // regions drawn again with their own bank (total)
+
+// Per-line palette banks (upstream SetActivePalette / gfxLineBuffer; user decision 2026-09-24: replay
+// per region). The frame was drawn with line 0's bank; every further run of lines with another bank
+// gets its bank's CLUT rows (same VRAM rows), a drawing area of those lines, a fresh base (clear
+// colour, or the last frame in a repeated frame) and a replay of the frame's primitives.
+static void PS1DrawBankRegions(psyqo::Color clear)
+{
+    uint32_t *sceneEnd = PS1ChainMark();
+    int regions = 1, y0 = 0;
+    uint32_t mask = 1u << gfxLineBuffer[0];
+    for (int y = 1; y <= SCREEN_YSIZE; ++y) {
+        if (y < SCREEN_YSIZE && gfxLineBuffer[y] == gfxLineBuffer[y0])
+            continue;
+        if (y0 > 0) { // regions after the first: the frame again, with this region's bank
+            int bank  = gfxLineBuffer[y0];
+            int first = s_palChunkCount;
+            PS1ReservePaletteRows();
+            PS1FillPalette(bank, first);
+            PS1ChainFlushCache();
+            PS1ChainDrawArea(0, y0, 320, y);
+            if (s_frameFresh)
+                PS1ChainFillLines(y0, y, clear.r, clear.g, clear.b);
+            else
+                PS1ChainCopyLastFrameLines(y0, y);
+            PS1ChainReplayLines(s_sceneMark, sceneEnd, y0, y);
+            g_ps1BankReplays = g_ps1BankReplays + 1;
+            mask |= 1u << bank;
+        }
+        if (y < SCREEN_YSIZE) {
+            ++regions;
+            y0 = y;
+        }
+    }
+    if (regions > 1) {
+        PS1ChainDrawAreaReset();
+        PS1ChainInvalidateTPage();
+    }
+    g_ps1BankRegions = regions;
+    g_ps1BankMask    = mask;
+}
+
+// PC converts the palette here, after drawing: the CLUT rows chained at the frame start get the
+// palette as it is now (a SetFade / palette change from a draw sub shows in the same frame).
 void FlipScreen()
 {
     if (!s_frameOpen)
         return;
     PS1ChainSetHook(nullptr); // nothing else comes: a pending fade stays a CLUT fade (the hook would draw it)
-    PS1FillPalette();
+    psyqo::Color clear = { { .r = 0, .g = 0, .b = 0 } };
+    if (s_fadePending)
+        clear = psyqo::Color{ { .r = (uint8_t)(s_fadeR * s_fadeA / 255), .g = (uint8_t)(s_fadeG * s_fadeA / 255),
+                                .b = (uint8_t)(s_fadeB * s_fadeA / 255) } };
+    int frameChunks = s_palChunkCount;
+    PS1DrawBankRegions(clear);
+    int end         = s_palChunkCount; // the regions filled their own chunks: refill only the frame-start rows
+    s_palChunkCount = frameChunks;
+    PS1FillPalette(gfxLineBuffer[0]);
+    s_palChunkCount = end;
     if (s_fadePending) {
         g_ps1ClutFades = g_ps1ClutFades + 1;
         if (s_clearPrim) // cleared (undrawn) pixels are black: under the fade, fade colour * a
-            s_clearPrim->setColor(psyqo::Color{ { .r = (uint8_t)(s_fadeR * s_fadeA / 255), .g = (uint8_t)(s_fadeG * s_fadeA / 255),
-                                                  .b = (uint8_t)(s_fadeB * s_fadeA / 255) } });
+            s_clearPrim->setColor(clear);
     }
 }
 

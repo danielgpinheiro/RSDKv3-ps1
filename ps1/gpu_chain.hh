@@ -59,9 +59,16 @@ void PS1ChainRect(const psyqo::Prim::Rectangle &r);            // untextured; se
 // linked from `from` up to (not including) `to`, skipping CPU->VRAM uploads. Returns words used.
 uint32_t *PS1ChainMark();
 int PS1ChainReplay(uint32_t *from, uint32_t *to);
+// Same, keeping only fragments whose primitives touch screen lines [y0, y1) (state-only fragments
+// always): per-line palette-bank regions (ps1/render.cpp) replay just what they need.
+int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1);
 // Drawing area (GP0 E3h/E4h) in screen coordinates of the buffer this frame draws into;
 // Reset restores the whole 320x240 buffer. Mask control = GP0 E6h (psx-spx "Mask Bit Setting").
 void PS1ChainDrawArea(int x0, int y0, int x1, int y1);
+// Lines [y0, y1) of the buffer this frame draws into: filled with a colour (FastFill ignores the
+// drawing area), or copied from the last finished frame (the displayed buffer).
+void PS1ChainFillLines(int y0, int y1, uint8_t r, uint8_t g, uint8_t b);
+void PS1ChainCopyLastFrameLines(int y0, int y1);
 void PS1ChainDrawAreaReset();
 void PS1ChainMaskControl(bool forceSet, bool test);
 // One-shot hook, run before the next primitive/upload is chained (or by PS1ChainRunHook()).
