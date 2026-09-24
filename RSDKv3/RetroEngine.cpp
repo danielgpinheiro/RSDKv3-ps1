@@ -283,6 +283,7 @@ void RetroEngine::Init()
     GenerateBlendLookupTable();
     InitUserdata();
 #if RETRO_PLATFORM == RETRO_PS1
+    Engine.onlineActive = false; // no online services on a PS1 (the scripts check it: menu buttons, achievements)
     { // One disc per language (docs/28 phase 4): the disc says which (tools/build_assets.py --lang).
         FileInfo info;
         if (LoadFile("Data/Game/PS1Language.bin", &info)) {

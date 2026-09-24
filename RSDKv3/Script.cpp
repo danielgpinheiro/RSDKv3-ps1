@@ -11,6 +11,10 @@ volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table p
 volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 instead of a trap)
 volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
 volatile uint32_t g_ps1ScriptBadPtr    = 0; // sub/function pointers past the PS1 arrays (not the PC sentinels)
+// Platform id seen by one object's startup sub (Object.cpp ProcessStartupObjects), -1 = the real one.
+// User decision 2026-09-24: hide the main menu's LEADERBOARDS / ACHIEVEMENTS: the Menu Button startup
+// builds its button set per platform, and the mobile set (offline) has neither.
+int g_ps1PlatformOverride = -1;
 #define PS1_PC_SCRIPTDATA_END (0x40000 - 1) // PC SCRIPTDATA_COUNT - 1: "no sub" in the bytecode files
 #define PS1_PC_JUMPTABLE_END  (0x4000 - 1)
 static void PS1FixScriptPtr(ScriptPtr *p)
@@ -2931,7 +2935,11 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     case VAR_ENGINEFRAMESKIPSETTING: scriptEng.operands[i] = Engine.frameSkipSetting; break;
                     case VAR_ENGINESFXVOLUME: scriptEng.operands[i] = sfxVolume; break;
                     case VAR_ENGINEBGMVOLUME: scriptEng.operands[i] = bgmVolume; break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_ENGINEPLATFORMID: scriptEng.operands[i] = g_ps1PlatformOverride >= 0 ? g_ps1PlatformOverride : RETRO_GAMEPLATFORMID; break;
+#else
                     case VAR_ENGINEPLATFORMID: scriptEng.operands[i] = RETRO_GAMEPLATFORMID; break;
+#endif
                     case VAR_ENGINETRIALMODE: scriptEng.operands[i] = Engine.trialMode; break;
                     case VAR_KEYPRESSANYSTART: scriptEng.operands[i] = anyPress; break;
 #if RETRO_USE_HAPTICS

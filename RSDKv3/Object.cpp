@@ -39,8 +39,16 @@ void ProcessStartupObjects()
         scriptInfo->frameListOffset = scriptFrameCount;
         scriptInfo->spriteSheetID   = 0;
         entity->type                = i;
+#if RETRO_PLATFORM == RETRO_PS1
+        // Sonic CD's main menu buttons: the mobile, offline set (no LEADERBOARDS / ACHIEVEMENTS; Script.cpp).
+        extern int g_ps1PlatformOverride;
+        g_ps1PlatformOverride = StrComp(typeNames[i], "MenuButton") ? RETRO_ANDROID : -1;
+#endif
         if (scriptCode[scriptInfo->subStartup.scriptCodePtr] > 0)
             ProcessScript(scriptInfo->subStartup.scriptCodePtr, scriptInfo->subStartup.jumpTablePtr, SUB_SETUP);
+#if RETRO_PLATFORM == RETRO_PS1
+        g_ps1PlatformOverride = -1;
+#endif
         scriptInfo->frameCount = scriptFrameCount - scriptInfo->frameListOffset;
     }
     entity->type  = 0;
