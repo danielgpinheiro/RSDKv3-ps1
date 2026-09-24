@@ -33,6 +33,9 @@ Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report]
 """
 import os, re, struct, sys
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from object_sheets import object_sheets  # noqa: E402
 from PIL import Image
 
 PAGE = 256
@@ -56,6 +59,19 @@ def manifest_frames(data, path, images):
     """{sheet path: set of (x, y, w, h)} for one stage manifest (all its `stage` blocks)."""
     frames, sheets = {}, {}
 
+    def add_frame(sid, x, y, w, h):
+        while w > 0 and h > 0 and sid in sheets and size(sheets[sid]) is not None:
+            H, W = size(sheets[sid])
+            if y >= H:  # past the bottom: the next loaded sheet of the same width
+                nxt = sheets.get(sid + 1)
+                if nxt is None or size(nxt) is None or size(nxt)[1] != W:
+                    break
+                sid, y = sid + 1, y - H
+                continue
+            part = min(h, H - y)
+            frames.setdefault(sheets[sid], set()).add((x, y, w, part))
+            y, h = y + part, h - part
+
     def size(sheet):
         if sheet not in images:
             f = os.path.join(data, 'Sprites', sheet)
@@ -63,26 +79,25 @@ def manifest_frames(data, path, images):
         im = images[sheet]
         return None if im is None else im.shape  # (H, W)
 
+    objsheets = {}  # this stage block: object name -> sheets its subs may load (tools/atlas/object_sheets)
     for line in open(path):
         t = line.split()
         if t[0] == 'stage':
             sheets = {}
+            objsheets = {k.replace(' ', '').lower(): v for k, v in object_sheets(data, int(t[1]), int(t[2]), t[3]).items()}
         elif t[0] == 'sheet':
             sheets[int(t[1])] = t[2]
         elif t[0] == 'frame':
             sid, x, y, w, h = map(int, t[1:6])
-            while w > 0 and h > 0 and sid in sheets and size(sheets[sid]) is not None:
-                H, W = size(sheets[sid])
-                if y >= H:  # past the bottom: the next loaded sheet of the same width
-                    nxt = sheets.get(sid + 1)
-                    if nxt is None or size(nxt) is None or size(nxt)[1] != W:
-                        break
-                    sid, y = sid + 1, y - H
-                    continue
-                part = min(h, H - y)
-                frames.setdefault(sheets[sid], set()).add((x, y, w, part))
-                y, h = y + part, h - part
+            sids = [sid]
+            if t[6] == 'obj':  # also every other sheet of this stage the object may switch to
+                name = ''.join(t[7:]).lower()  # engine typeNames have no spaces
+                loaded = {p.lower(): i for i, p in sheets.items()}
+                sids += [loaded[p.lower()] for p in objsheets.get(name, ()) if p.lower() in loaded and loaded[p.lower()] != sid]
+            for sid in sids:
+                add_frame(sid, x, y, w, h)
     return frames
+
 
 
 def merge(rects):
