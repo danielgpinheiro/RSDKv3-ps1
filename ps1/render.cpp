@@ -93,17 +93,32 @@ struct PS1PalChunk {
 static PS1PalChunk s_palChunks[128];
 static int s_palChunkCount = 0;
 
-static inline uint16_t PS1Conv(const PaletteEntry &c)
-{
-    uint16_t v = (uint16_t)((c.r >> 3) | ((c.g >> 3) << 5) | ((c.b >> 3) << 10));
-    return v ? v : 0x8000; // visible black: 0x0000 would be transparent
-}
+// Every visible entry carries the STP bit (0x8000): textured primitives drawn semi-transparent then
+// blend all their texels (psx-spx: only STP texels blend), opaque draws are unaffected; 0x0000 stays
+// transparent (index 0).
+static inline uint16_t PS1Conv(int r, int g, int b) { return (uint16_t)(0x8000 | (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10)); }
+
+// A full-screen alpha DrawRectangle that ends the frame (PC's screen fades) is applied to the CLUTs
+// and the clear colour at FlipScreen: every pixel is CLUT-based, so this is PC's per-pixel blend
+// c * (255 - a) + fade * a, exactly (user decision 2026-09-24). If anything is drawn after it, the
+// chain hook draws it as a 4-level alpha rectangle instead (PS1FadeHook).
+static bool s_fadePending = false;
+static int s_fadeR, s_fadeG, s_fadeB, s_fadeA;
+static psyqo::Prim::FastFill *s_clearPrim = nullptr;
+volatile uint32_t g_ps1ClutFades = 0; // frames whose fade went into the CLUTs (exact)
 
 static void PS1BuildPalette()
 {
     const PaletteEntry *pal = fullPalette32[gfxLineBuffer[0]]; // bank of line 0 (per-line banks: 3.4)
     s_pal[0]                = 0x0000;                          // index 0 = transparent (tiles and sprites)
-    for (int i = 1; i < 256; ++i) s_pal[i] = PS1Conv(pal[i]);
+    if (s_fadePending) {
+        int a = s_fadeA, na = 255 - a;
+        for (int i = 1; i < 256; ++i)
+            s_pal[i] = PS1Conv((pal[i].r * na + s_fadeR * a) / 255, (pal[i].g * na + s_fadeG * a) / 255, (pal[i].b * na + s_fadeB * a) / 255);
+    }
+    else {
+        for (int i = 1; i < 256; ++i) s_pal[i] = PS1Conv(pal[i].r, pal[i].g, pal[i].b);
+    }
     for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
         const uint8_t *map = g_ps1AtlasCluts[k].map;
         uint16_t *dst      = &s_pal[256 + k * 16];
@@ -146,10 +161,15 @@ static void PS1FrameStart(bool clear)
         return;
     s_frameOpen      = true;
     s_frameFresh     = clear;
-    g_ps1DrawSprites = g_ps1DrawQuads = g_ps1LayerPrims = g_ps1LayerHbl = 0;
+    g_ps1DrawSprites = 0;
+    g_ps1DrawQuads   = 0;
+    g_ps1LayerPrims  = 0;
+    g_ps1LayerHbl    = 0;
     for (int i = 0; i < 5; ++i) g_ps1ProfLayer[i] = 0;
+    s_fadePending = false;
+    s_clearPrim   = nullptr;
     if (clear) {
-        PS1ChainClear(0, 0, 0);
+        s_clearPrim = PS1ChainClear(0, 0, 0);
         g_ps1DrawFrames = g_ps1DrawFrames + 1;
     }
     else {
@@ -313,10 +333,37 @@ template <typename Fn> static void PS1ForEachPiece(int sheetID, int width, int h
 
 static inline bool PS1ObjectsHidden() { return (g_ps1DebugDrawMask & 1) != 0; }
 
+// Ink state for the next pieces: GPU semi-transparency mode (psx-spx GP0 E1h bits 5-6) and the texel
+// modulation (0x80 = unchanged). Set by the ink draw calls around their piece loops.
+enum PS1Ink { PS1_INK_OPAQUE, PS1_INK_HALF, PS1_INK_ADD, PS1_INK_SUB };
+static uint8_t s_ink    = PS1_INK_OPAQUE;
+static uint8_t s_inkMod = 0x80;
+volatile uint32_t g_ps1InkPieces = 0; // semi-transparent sprite pieces chained
+
+static inline void PS1ApplyInk(psyqo::PrimPieces::TPageAttr &attr)
+{
+    static const psyqo::Prim::TPageAttr::SemiTrans modes[4] = { psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront,
+                                                                psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront,
+                                                                psyqo::Prim::TPageAttr::SemiTrans::FullBackAndFullFront,
+                                                                psyqo::Prim::TPageAttr::SemiTrans::FullBackSubFullFront };
+    attr.set(modes[s_ink]);
+}
+
+// PC alpha 0-255 -> the PS1 levels (user decision 2026-09-24): 0 skip, 1 = 50 %, 2 = 75 % (two 50 %
+// draws: B/4 + 3F/4), 3 = opaque.
+static inline int PS1AlphaLevel(int a) { return a < 64 ? 0 : a < 160 ? 1 : a < 224 ? 2 : 3; }
+
 static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
 {
-    PS1ChainTPage(PS1ClusterTPage(p.c));
-    psyqo::Prim::Sprite s(psyqo::Color{ { .r = 0x80, .g = 0x80, .b = 0x80 } });
+    psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(p.c);
+    if (s_ink != PS1_INK_OPAQUE)
+        PS1ApplyInk(attr);
+    PS1ChainTPage(attr);
+    psyqo::Prim::Sprite s(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
+    if (s_ink != PS1_INK_OPAQUE) {
+        s.setSemiTrans();
+        g_ps1InkPieces = g_ps1InkPieces + 1;
+    }
     s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)y } };
     s.size     = psyqo::Vertex{ { .w = p.w, .h = p.h } };
     s.texInfo  = psyqo::PrimPieces::TexInfo{ (uint8_t)p.u, (uint8_t)p.v, PS1ClusterClut(p.c) };
@@ -330,7 +377,7 @@ static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
 static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_t *ys, int u0, int u1, int v0, int v1)
 {
     auto clampUV = [](int t) { return (uint8_t)(t < 0 ? 0 : t > 255 ? 255 : t); };
-    psyqo::Prim::TexturedQuad q(psyqo::Color{ { .r = 0x80, .g = 0x80, .b = 0x80 } });
+    psyqo::Prim::TexturedQuad q(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
     q.pointA    = psyqo::Vertex{ { .x = xs[0], .y = ys[0] } };
     q.pointB    = psyqo::Vertex{ { .x = xs[1], .y = ys[1] } };
     q.pointC    = psyqo::Vertex{ { .x = xs[2], .y = ys[2] } };
@@ -341,6 +388,11 @@ static void PS1ChainPieceQuad(const PS1Piece &p, const int16_t *xs, const int16_
     q.uvD       = psyqo::PrimPieces::UVCoordsPadded{ clampUV(u1), clampUV(v1), 0 };
     q.clutIndex = PS1ClusterClut(p.c);
     q.tpage     = PS1ClusterTPage(p.c);
+    if (s_ink != PS1_INK_OPAQUE) {
+        PS1ApplyInk(q.tpage);
+        q.setSemiTrans();
+        g_ps1InkPieces = g_ps1InkPieces + 1;
+    }
     PS1ChainQuad(q);
     g_ps1DrawQuads = g_ps1DrawQuads + 1;
 }
@@ -386,8 +438,16 @@ int InitRenderDevice()
 // palette as it is now (a SetFade / palette change from a draw sub shows in the same frame).
 void FlipScreen()
 {
-    if (s_frameOpen)
-        PS1FillPalette();
+    if (!s_frameOpen)
+        return;
+    PS1ChainSetHook(nullptr); // nothing else comes: a pending fade stays a CLUT fade (the hook would draw it)
+    PS1FillPalette();
+    if (s_fadePending) {
+        g_ps1ClutFades = g_ps1ClutFades + 1;
+        if (s_clearPrim) // cleared (undrawn) pixels are black: under the fade, fade colour * a
+            s_clearPrim->setColor(psyqo::Color{ { .r = (uint8_t)(s_fadeR * s_fadeA / 255), .g = (uint8_t)(s_fadeG * s_fadeA / 255),
+                                                  .b = (uint8_t)(s_fadeB * s_fadeA / 255) } });
+    }
 }
 
 void GenerateBlendLookupTable() {}
@@ -975,25 +1035,54 @@ void DrawVLineScrollLayer(int layerID)
 // ---------------------------------------------------------------------------------------------------
 // Shapes
 
+// Rectangle at a PS1 alpha level (see PS1AlphaLevel): 50 % = B/2 + F/2, 75 % = twice.
+static void PS1ChainAlphaRect(int XPos, int YPos, int width, int height, int R, int G, int B, int level)
+{
+    psyqo::Prim::Rectangle r(psyqo::Color{ { .r = (uint8_t)R, .g = (uint8_t)G, .b = (uint8_t)B } });
+    r.position = psyqo::Vertex{ { .x = (int16_t)XPos, .y = (int16_t)YPos } };
+    r.size     = psyqo::Vertex{ { .w = (int16_t)width, .h = (int16_t)height } };
+    if (level >= 3) {
+        PS1ChainRect(r);
+        return;
+    }
+    psyqo::PrimPieces::TPageAttr attr; // untextured semi-transparency takes its mode from the texpage
+    attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
+    PS1ChainTPage(attr);
+    r.setSemiTrans();
+    PS1ChainRect(r);
+    if (level == 2)
+        PS1ChainRect(r);
+}
+
+// The pending full-screen fade turned out not to end the frame: draw it now (4 levels).
+static void PS1FadeHook()
+{
+    if (!s_fadePending)
+        return;
+    s_fadePending = false;
+    int level     = PS1AlphaLevel(s_fadeA);
+    if (level)
+        PS1ChainAlphaRect(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, s_fadeR, s_fadeG, s_fadeB, level);
+}
+
 void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
 {
     if (A <= 0 || width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
         return;
     if (A > 0xFF)
         A = 0xFF;
-    psyqo::Prim::Rectangle r(psyqo::Color{ { .r = (uint8_t)R, .g = (uint8_t)G, .b = (uint8_t)B } });
-    r.position = psyqo::Vertex{ { .x = (int16_t)XPos, .y = (int16_t)YPos } };
-    r.size     = psyqo::Vertex{ { .w = (int16_t)width, .h = (int16_t)height } };
-    if (A < 0xFF) { // 3.3 replaces this with real alpha: for now B/2 + F/2 when half-visible or more
-        if (A < 0x80)
-            return;
-        psyqo::PrimPieces::TPageAttr attr;
-        attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
-        PS1ChainTPage(attr);
-        r.setSemiTrans();
-        g_ps1DrawTodo = g_ps1DrawTodo + 1;
+    PS1FadeHook(); // an earlier pending fade is followed by this: draw it first
+    // Only in a frame that started with a clear: a repeated frame's copied pixels aren't CLUT-based
+    // any more, so a CLUT fade wouldn't reach them (paused stage mode, PC's persistent framebuffer).
+    if (A < 0xFF && s_frameFresh && XPos <= 0 && YPos <= 0 && XPos + width >= SCREEN_XSIZE && YPos + height >= SCREEN_YSIZE) {
+        s_fadePending = true; // exact CLUT fade at FlipScreen unless something is drawn after it
+        s_fadeR = R, s_fadeG = G, s_fadeB = B, s_fadeA = A;
+        PS1ChainSetHook(PS1FadeHook);
+        return;
     }
-    PS1ChainRect(r);
+    int level = PS1AlphaLevel(A == 0xFF ? 0xFF : A);
+    if (level)
+        PS1ChainAlphaRect(XPos, YPos, width, height, R, G, B, level);
 }
 
 void DrawTintRectangle(int XPos, int YPos, int width, int height) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
@@ -1096,27 +1185,45 @@ void DrawSpriteRotozoom(int direction, int XPos, int YPos, int pivotX, int pivot
     PS1DrawSpriteAffine(direction, XPos, YPos, pivotX, pivotY, sprX, sprY, width, height, rotation, scale, sheetID);
 }
 
-// Ink effects: step 3.3 (GPU semi-transparency needs STP-marked CLUTs). Drawn plain until then.
+// Ink effects (user decision 2026-09-24): INK_BLEND = 50 % (exact), INK_ALPHA = 4 levels, INK_ADD /
+// INK_SUB = GPU add / subtract with the texels scaled by alpha (exact up to 5-bit colour).
+static void PS1DrawInkSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID, uint8_t ink, uint8_t mod, int passes)
+{
+    s_ink    = ink;
+    s_inkMod = mod;
+    for (int i = 0; i < passes; ++i) DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
+    s_ink    = PS1_INK_OPAQUE;
+    s_inkMod = 0x80;
+}
+
 void DrawBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
-    g_ps1DrawTodo = g_ps1DrawTodo + 1;
-    DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
+    PS1DrawInkSprite(XPos, YPos, width, height, sprX, sprY, sheetID, PS1_INK_HALF, 0x80, 1);
 }
+
 void DrawAlphaBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
 {
-    g_ps1DrawTodo = g_ps1DrawTodo + 1;
-    if (alpha >= 0x80)
+    int level = PS1AlphaLevel(alpha > 0xFF ? 0xFF : alpha);
+    if (level == 3)
         DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
+    else if (level)
+        PS1DrawInkSprite(XPos, YPos, width, height, sprX, sprY, sheetID, PS1_INK_HALF, 0x80, level);
 }
+
 void DrawAdditiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
 {
-    g_ps1DrawTodo = g_ps1DrawTodo + 1;
-    if (alpha >= 0x80)
-        DrawSprite(XPos, YPos, width, height, sprX, sprY, sheetID);
+    if (alpha > 0xFF)
+        alpha = 0xFF;
+    if (alpha > 0)
+        PS1DrawInkSprite(XPos, YPos, width, height, sprX, sprY, sheetID, PS1_INK_ADD, (uint8_t)((alpha + 1) >> 1), 1);
 }
+
 void DrawSubtractiveBlendedSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int alpha, int sheetID)
 {
-    g_ps1DrawTodo = g_ps1DrawTodo + 1;
+    if (alpha > 0xFF)
+        alpha = 0xFF;
+    if (alpha > 0)
+        PS1DrawInkSprite(XPos, YPos, width, height, sprX, sprY, sheetID, PS1_INK_SUB, (uint8_t)((alpha + 1) >> 1), 1);
 }
 
 // upstream DrawObjectAnimation, verbatim: picks the draw call from the animation's rotation style.
