@@ -291,6 +291,62 @@ void PS1ChainSprite16Raw(uint32_t xy, uint32_t tex) {
     w[2]        = tex;
 }
 
+void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
+    static uint32_t cmd = 0;
+    if (!cmd) {
+        psyqo::Prim::Sprite16x16 s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
+        memcpy(&cmd, &s, 4);
+    }
+    if (g_ps1ChainSkipPrims || n <= 0)
+        return;
+    runHook();
+    flushBatch();
+    while (n > 0) {
+        int k = n < PS1_TILE_BATCH ? n : PS1_TILE_BATCH;
+        VarFragment *f = allocVar(3 * k);
+        if (!f)
+            return;
+        uint32_t *w = f->data;
+        for (int i = 0; i < k; ++i) {
+            w[0] = cmd;
+            w[1] = *xy++;
+            w[2] = *tex++;
+            w += 3;
+        }
+        s_gpu->chain(*f);
+        n -= k;
+    }
+}
+
+void PS1ChainSpriteRawN(const uint32_t *words, int n) {
+    static uint32_t cmd = 0;
+    if (!cmd) {
+        psyqo::Prim::Sprite s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
+        memcpy(&cmd, &s, 4);
+    }
+    if (g_ps1ChainSkipPrims || n <= 0)
+        return;
+    runHook();
+    flushBatch();
+    while (n > 0) {
+        int k = n < PS1_SPRITE_BATCH ? n : PS1_SPRITE_BATCH;
+        VarFragment *f = allocVar(4 * k);
+        if (!f)
+            return;
+        uint32_t *w = f->data;
+        for (int i = 0; i < k; ++i) {
+            w[0] = cmd;
+            w[1] = words[0];
+            w[2] = words[1];
+            w[3] = words[2];
+            w += 4;
+            words += 3;
+        }
+        s_gpu->chain(*f);
+        n -= k;
+    }
+}
+
 void PS1ChainSprite(const psyqo::Prim::Sprite &s) {
     if (g_ps1ChainSkipPrims)
         return;

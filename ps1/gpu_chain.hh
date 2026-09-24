@@ -50,6 +50,12 @@ void PS1ChainInvalidateTPage();                                // GPU texpage st
 void PS1ChainSprite16(const psyqo::Prim::Sprite16x16 &s);      // batched (tiles)
 // Fast tile path: a Sprite16x16 from its raw words (colour 0x80, xy = x | y << 16, tex = u | v << 8 | clut << 16).
 void PS1ChainSprite16Raw(uint32_t xy, uint32_t tex);
+// Bulk version for tile bands: n 16x16 sprites (colour 0x80) from xy[] / tex[] words, written straight
+// into exact-size fragments of <= 4 sprites (no per-tile call or constructor). Keeps the draw order.
+void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n);
+// Bulk variable-size sprites (GP0 64h, colour 0x80): n sprites of 3 words each {xy, u|v<<8|clut<<16,
+// w|h<<16} in `words`, into exact-size fragments of <= 3 sprites (12 words). Keeps the draw order.
+void PS1ChainSpriteRawN(const uint32_t *words, int n);
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
 void PS1ChainQuad(const psyqo::Prim::TexturedQuad &q);         // note: quads carry their own texpage
 void PS1ChainRect(const psyqo::Prim::Rectangle &r);            // untextured; semi-trans uses the current texpage mode

@@ -68,12 +68,14 @@ volatile uint32_t g_ps1DrawSprites    = 0; // atlas sprite pieces chained this f
 volatile uint32_t g_ps1DrawQuads      = 0; // textured quads chained this frame (flip / scale / rotation)
 volatile uint32_t g_ps1LayerPrims     = 0; // tile-layer primitives chained this frame
 volatile uint32_t g_ps1LayerHbl       = 0; // CPU time of this frame's tile layers (hblanks)
+volatile uint32_t g_ps1StripBandCount = 0; // strip bands drawn this frame (profiling)
+volatile uint32_t g_ps1TileBandCount  = 0; // tile bands drawn this frame (profiling)
 volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
 volatile uint32_t g_ps1DrawTodo       = 0; // draw calls of later steps (ink effects, faces, text...), skipped
 volatile uint32_t g_ps1SurfaceGen     = 1; // bumped by Sprite.cpp when a sheet name is (un)registered
-volatile uint8_t g_ps1DebugDrawMask   = 0; // bit 0: drop object-list primitives (layers-only frames)
+volatile uint8_t g_ps1DebugDrawMask   = 0; // bit 0: drop object-list primitives (layers-only frames); bit 1: tile bands chain nothing (profiling)
 
 // ---------------------------------------------------------------------------------------------------
 // Palette: master CLUT (256 x 15-bit) at (0, 240), the atlas' 4-bit CLUTs (16 entries of master
@@ -182,6 +184,8 @@ static void PS1FrameStart(bool clear)
     g_ps1LayerPrims  = 0;
     g_ps1LayerHbl    = 0;
     for (int i = 0; i < 5; ++i) g_ps1ProfLayer[i] = 0;
+    g_ps1StripBandCount = 0;
+    g_ps1TileBandCount  = 0;
     s_fadePending = false;
     s_clearPrim   = nullptr;
     if (clear) {
@@ -760,7 +764,8 @@ static void PS1DrawTilePiece(int sx, int sy, int tileIndex, int ty0, int h, int 
 // Bands touching a screen edge are extended to whole tile rows (the GPU clips).
 static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
 {
-    int ty0 = ly & 0xF;
+    g_ps1TileBandCount = g_ps1TileBandCount + 1;
+    int ty0            = ly & 0xF;
     if (sy == 0) {
         sy -= ty0, h += ty0, ty0 = 0;
     }
@@ -770,45 +775,60 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
     int tileRow            = ((ly & 0x7F) >> 4) << 3;
     uint16_t want          = PS1_TV_SOLID | (above ? PS1_TV_PLANE : 0);
     uint32_t yWord         = (uint32_t)(uint16_t)sy << 16;
+    uint32_t clutWord      = s_tileClutWord;
     bool whole             = h == TILE_SIZE;
+    bool chain             = !(g_ps1DebugDrawMask & 2);
     int curPage            = -1;
     int prims              = 0;
-    int px                 = chunkX & ~0xF;
     uint16_t rowBit        = 1 << ((tileRow >> 3) * 2 + (above ? 1 : 0));
-    for (int sx = -(chunkX & 0xF); sx < SCREEN_XSIZE;) {
+    uint32_t runXY[24], runTex[24]; // one band: <= 21 tiles across 320 px
+    int run = 0;
+    int px  = chunkX & ~0xF;
+    int sx  = -(chunkX & 0xF);
+    // Chunk by chunk: one chunk-row lookup, then its tiles' packed visuals read in sequence.
+    while (sx < SCREEN_XSIZE) {
+        int first = (px & 0x7F) >> 4, count = 8 - first;
         int chunk = chunkRow[px >> 7];
-        if (!(s_chunkRowPlanes[chunk] & rowBit)) { // nothing on this plane in this chunk row
-            int skip = CHUNK_SIZE - (px & 0x7F);
-            sx += skip;
-            px += skip;
-            if (px >= fullW)
-                px -= fullW;
-            continue;
-        }
-        uint16_t tv = s_tileVis[(chunk << 6) + ((px & 0x7F) >> 4) + tileRow];
-        sx += TILE_SIZE;
-        px += TILE_SIZE;
-        if (px >= fullW)
-            px = 0;
-        if ((tv & (PS1_TV_SOLID | PS1_TV_PLANE)) != want)
-            continue;
-        ++prims;
-        int dir       = (tv >> PS1_TV_DIR_SHIFT) & 3;
-        int tileIndex = tv & PS1_TV_INDEX;
-        int dx        = sx - TILE_SIZE;
-        if (whole && dir == FLIP_NONE) {
-            int page = tileIndex >> 8, pt = tileIndex & 0xFF;
-            if (page != curPage) {
-                PS1ChainTPage(s_tileTPage[page]);
-                curPage = page;
+        if (s_chunkRowPlanes[chunk] & rowBit) {
+            const uint16_t *vis = &s_tileVis[(chunk << 6) + tileRow + first];
+            int x               = sx;
+            for (int k = 0; k < count && x < SCREEN_XSIZE; ++k, x += TILE_SIZE) {
+                uint16_t tv = vis[k];
+                if ((tv & (PS1_TV_SOLID | PS1_TV_PLANE)) != want)
+                    continue;
+                ++prims;
+                int dir       = (tv >> PS1_TV_DIR_SHIFT) & 3;
+                int tileIndex = tv & PS1_TV_INDEX;
+                if (whole && dir == FLIP_NONE) { // collected, chained in bulk per texture page
+                    int page = tileIndex >> 8, pt = tileIndex & 0xFF;
+                    if (page != curPage) {
+                        if (chain) {
+                            PS1ChainSprite16RawN(runXY, runTex, run);
+                            PS1ChainTPage(s_tileTPage[page]);
+                        }
+                        run     = 0;
+                        curPage = page;
+                    }
+                    runXY[run]    = yWord | (uint16_t)x;
+                    runTex[run++] = (uint32_t)(((pt & 0xF) << 4) | ((pt & 0xF0) << 8)) | clutWord;
+                }
+                else {
+                    if (chain) {
+                        PS1ChainSprite16RawN(runXY, runTex, run);
+                        PS1DrawTilePiece(x, sy, tileIndex, ty0, h, dir);
+                    }
+                    run     = 0;
+                    curPage = -1;
+                }
             }
-            PS1ChainSprite16Raw(yWord | (uint16_t)dx, (uint32_t)(((pt & 0xF) << 4) | (((pt >> 4) << 4) << 8)) | s_tileClutWord);
         }
-        else {
-            PS1DrawTilePiece(dx, sy, tileIndex, ty0, h, dir);
-            curPage = -1;
-        }
+        sx += count * TILE_SIZE;
+        px += count * TILE_SIZE;
+        if (px >= fullW)
+            px -= fullW;
     }
+    if (chain)
+        PS1ChainSprite16RawN(runXY, runTex, run);
     g_ps1LayerPrims = g_ps1LayerPrims + prims;
 }
 
@@ -901,47 +921,44 @@ void PS1LoadBGStrips(const char *folder, int player)
     g_ps1StripBytes   = bytes;
 }
 
-// A band of lines [ly, ly + h) inside a strip region scrolled to chunkX: walk the period from
-// chunkX % period across the screen, one sprite per piece run (<= 256 texels, one page). Only runs of
-// piece `piece` are drawn, so all bands of a region are drawn piece by piece (one texpage each).
-static int PS1DrawStripBand(const PS1StripRegion &r, int sy, int h, int ly, int chunkX, int piece)
+// Strip sprites of one region, grouped by piece with a counting sort (pass 1 counts each piece's runs,
+// pass 2 writes them at the piece's offset), then chained piece by piece: one texpage + bulk sprites.
+// {xy, u|v<<8|clut<<16, w|h<<16} words; a band spans <= 3 runs, so 768 runs cover 240 bands (9 KB).
+#define PS1_STRIP_RUNS 768
+static uint32_t s_stripRuns[PS1_STRIP_RUNS * 3];
+
+// Walks a band of lines [ly, ly + h) in a strip region scrolled to chunkX (period from chunkX % period
+// across 320 px; a run <= 256 texels = one piece = one page). pos == nullptr: count runs per piece.
+static void PS1WalkStripBand(const PS1StripRegion &r, int sy, int h, int ly, int chunkX, uint32_t clut, int *count, int *pos)
 {
-    static uint16_t s_clut = 0;
-    if (!s_clut) {
-        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
-        memcpy(&s_clut, &clut, 2);
-    }
-    int row   = ly - r.line0;
-    int t     = chunkX % r.period;
-    int prims = 0;
+    int row = ly - r.line0;
+    int t   = chunkX % r.period;
+    int k = 0, s0 = 0;
+    while (t >= s0 + r.w[k]) s0 += r.w[k++];
     for (int x = 0; x < SCREEN_XSIZE;) {
-        int k = 0, s0 = 0;
-        while (t >= s0 + r.w[k]) s0 += r.w[k++];
         int u   = t - s0;
         int run = r.w[k] - u;
         if (run > SCREEN_XSIZE - x)
             run = SCREEN_XSIZE - x;
-        if (k == piece) {
-            psyqo::PrimPieces::TPageAttr attr;
-            attr.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
-            attr.setPageX((uint8_t)(r.x[k] >> 6));
-            attr.setPageY((uint8_t)(r.y[k] >> 8));
-            PS1ChainTPage(attr);
-            psyqo::Prim::Sprite s(psyqo::Color{ { .r = 0x80, .g = 0x80, .b = 0x80 } });
-            s.position = psyqo::Vertex{ { .x = (int16_t)x, .y = (int16_t)sy } };
-            psyqo::PrimPieces::ClutIndex clut;
-            memcpy(&clut, &s_clut, 2);
-            s.texInfo = psyqo::PrimPieces::TexInfo{ (uint8_t)u, (uint8_t)((r.y[k] & 0xFF) + row), clut };
-            s.size    = psyqo::Vertex{ { .x = (int16_t)run, .y = (int16_t)h } };
-            PS1ChainSprite(s);
-            ++prims;
+        if (!pos) {
+            ++count[k];
+        }
+        else if (pos[k] < PS1_STRIP_RUNS) {
+            uint32_t *w = &s_stripRuns[pos[k]++ * 3];
+            w[0]        = (uint32_t)(uint16_t)x | ((uint32_t)(uint16_t)sy << 16);
+            w[1]        = (uint32_t)u | ((uint32_t)((r.y[k] & 0xFF) + row) << 8) | clut;
+            w[2]        = (uint32_t)run | ((uint32_t)h << 16);
         }
         x += run;
         t += run;
-        if (t >= r.period)
-            t -= r.period;
+        s0 += r.w[k];
+        if (++k == r.pieces || t >= r.period) { // wrap to the period start
+            if (t >= r.period)
+                t -= r.period;
+            k = 0, s0 = 0;
+            while (t >= s0 + r.w[k]) s0 += r.w[k++];
+        }
     }
-    return prims;
 }
 
 struct PS1StripBand {
@@ -1089,16 +1106,44 @@ void DrawHLineScrollLayer(int layerID)
             ly -= fullH;
     }
     g_ps1ProfLayer[2] = g_ps1ProfLayer[2] + tTiles;
+    g_ps1StripBandCount = g_ps1StripBandCount + stripBands;
     uint32_t t2       = PS1Hblanks();
-    for (int i = 0; i < stripBands;) { // strip bands grouped by region and piece (one texpage each)
+    static uint32_t s_stripClut = 0;
+    if (!s_stripClut) {
+        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
+        uint16_t c;
+        memcpy(&c, &clut, 2);
+        s_stripClut = (uint32_t)c << 16;
+    }
+    for (int i = 0; i < stripBands;) { // strip bands grouped by region, chained piece by piece
         int region = s_stripBands[i].region, j = i;
         while (j < stripBands && s_stripBands[j].region == region) ++j;
-        const PS1StripRegion &r = s_strips[region];
-        int prims               = 0;
-        for (int k = 0; k < r.pieces; ++k)
-            for (int b = i; b < j; ++b) prims += PS1DrawStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, k);
-        g_ps1LayerPrims = g_ps1LayerPrims + prims;
-        i               = j;
+        const PS1StripRegion &r        = s_strips[region];
+        int count[PS1_STRIP_PIECES]    = {};
+        int pos[PS1_STRIP_PIECES], total = 0;
+        for (int b = i; b < j; ++b)
+            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count, nullptr);
+        for (int k = 0; k < r.pieces; ++k) {
+            pos[k] = total;
+            total += count[k];
+        }
+        for (int b = i; b < j; ++b)
+            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count, pos);
+        for (int k = 0, start = 0; k < r.pieces; start += count[k++]) {
+            int n = count[k];
+            if (start + n > PS1_STRIP_RUNS)
+                n = PS1_STRIP_RUNS - start;
+            if (n <= 0)
+                continue;
+            psyqo::PrimPieces::TPageAttr attr;
+            attr.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
+            attr.setPageX((uint8_t)(r.x[k] >> 6));
+            attr.setPageY((uint8_t)(r.y[k] >> 8));
+            PS1ChainTPage(attr);
+            PS1ChainSpriteRawN(&s_stripRuns[start * 3], n);
+            g_ps1LayerPrims = g_ps1LayerPrims + n;
+        }
+        i = j;
     }
     g_ps1ProfLayer[3] = g_ps1ProfLayer[3] + PS1HblanksSince(t2);
     (void)t1;
