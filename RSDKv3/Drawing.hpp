@@ -17,7 +17,11 @@ enum InkFlags { INK_NONE, INK_BLEND, INK_ALPHA, INK_ADD, INK_SUB };
 enum DrawFXFlags { FX_SCALE, FX_ROTATE, FX_ROTOZOOM, FX_INK, FX_TINT, FX_FLIP };
 
 struct DrawListEntry {
+#if RETRO_PLATFORM == RETRO_PS1
+    short entityRefs[ENTITY_COUNT]; // PS1: entity numbers (< ENTITY_COUNT; Sonic CD's scripts store only those) -> halves 38 KB
+#else
     int entityRefs[ENTITY_COUNT];
+#endif
     int listSize;
 };
 

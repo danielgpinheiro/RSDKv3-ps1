@@ -4,6 +4,7 @@
 extern volatile uint32_t g_ps1SurfaceGen; // ps1/render.cpp
 #endif
 
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: images are converted at build time (tools/atlas, tools/tiles); no GIF decoder (saves 25 KB)
 struct GifDecoder {
     int depth;
     int clearCode;
@@ -212,6 +213,7 @@ void ReadGifPictureData(int width, int height, bool interlaced, byte *gfxData, i
     }
     for (int h = 0; h < height; ++h) ReadGifLine(gfxData, width, h * width + offset);
 }
+#endif
 
 int AddGraphicsFile(const char *filePath)
 {
@@ -231,8 +233,7 @@ int AddGraphicsFile(const char *filePath)
     // Register the name; never decode an image at runtime (golden rule).
     StrCopy(gfxSurface[sheetID].fileName, sheetPath);
     g_ps1SurfaceGen = g_ps1SurfaceGen + 1; // ps1/render.cpp re-binds sheets to the atlas
-    return sheetID;
-#endif
+#else
     byte fileExtension = (byte)sheetPath[(StrLength(sheetPath) - 1) & 0xFF];
     switch (fileExtension) {
         case 'f': LoadGIFFile(sheetPath, sheetID); break;
@@ -241,6 +242,7 @@ int AddGraphicsFile(const char *filePath)
         case 'v': LoadRSVFile(sheetPath, sheetID); break;
         case 'x': LoadGFXFile(sheetPath, sheetID); break; // Not in lite/sf ver
     }
+#endif
 
     return sheetID;
 }
@@ -275,6 +277,10 @@ void RemoveGraphicsFile(const char *filePath, int sheetID)
     }
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: the dev menu's LoadGIFFile("Data/Game/SystemText.gif") has no atlas: nothing to load.
+int LoadGIFFile(const char *filePath, byte sheetID) { return false; }
+#else
 int LoadBMPFile(const char *filePath, byte sheetID)
 {
     FileInfo info;
@@ -566,3 +572,4 @@ int LoadPVRFile(const char *filePath, byte sheetID)
     }
     return false;
 }
+#endif // RETRO_PLATFORM != RETRO_PS1
