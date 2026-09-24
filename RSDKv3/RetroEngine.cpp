@@ -1,4 +1,9 @@
 #include "RetroEngine.hpp"
+
+#if RETRO_PLATFORM == RETRO_PS1
+// GameConfig stage entries / names that did not fit the PS1-sized stageList (Scene.hpp); for GDB.
+volatile uint32_t g_ps1StageListClamped = 0;
+#endif
 #if RETRO_PLATFORM == RETRO_UWP
 #include <winrt/base.h>
 #include <winrt/Windows.Storage.h>
@@ -367,6 +372,119 @@ void RetroEngine::Init()
 #endif
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: psyqo owns the frame loop (RSDKv3/main.cpp frame() -> RunFrame, flip by psyqo), so this is
+// one pass of Run()'s loop without the SDL timing, focus handling and window swap.
+void RetroEngine::RunFrame()
+{
+    for (int s = 0; s < gameSpeed; ++s) {
+        ProcessInput();
+
+        if (!masterPaused || frameStep) {
+            switch (gameMode) {
+                case ENGINE_DEVMENU:
+                    if (renderType == RENDER_HW) {
+                        gfxIndexSize        = 0;
+                        gfxVertexSize       = 0;
+                        gfxIndexSizeOpaque  = 0;
+                        gfxVertexSizeOpaque = 0;
+                    }
+                    ProcessStageSelect();
+                    break;
+
+                case ENGINE_MAINGAME:
+                    if (renderType == RENDER_HW) {
+                        gfxIndexSize        = 0;
+                        gfxVertexSize       = 0;
+                        gfxIndexSizeOpaque  = 0;
+                        gfxVertexSizeOpaque = 0;
+                        vertexSize3D        = 0;
+                        indexSize3D         = 0;
+                        render3DEnabled     = false;
+                    }
+                    ProcessStage();
+                    break;
+
+                case ENGINE_INITDEVMENU:
+                    LoadGameConfig("Data/Game/GameConfig.bin");
+                    InitDevMenu();
+                    ResetCurrentStageFolder();
+                    break;
+
+                case ENGINE_EXITGAME: running = false; break;
+
+                case ENGINE_SCRIPTERROR:
+                    LoadGameConfig("Data/Game/GameConfig.bin");
+                    InitErrorMessage();
+                    ResetCurrentStageFolder();
+                    break;
+
+                case ENGINE_ENTER_HIRESMODE:
+                    gameMode    = ENGINE_MAINGAME;
+                    highResMode = true;
+                    PrintLog("Callback: HiRes Mode Enabled");
+                    break;
+
+                case ENGINE_EXIT_HIRESMODE:
+                    gameMode    = ENGINE_MAINGAME;
+                    highResMode = false;
+                    PrintLog("Callback: HiRes Mode Disabled");
+                    break;
+
+                case ENGINE_PAUSE: break;
+                case ENGINE_WAIT: break;
+
+                case ENGINE_VIDEOWAIT:
+                    if (ProcessVideo() == 1)
+                        gameMode = ENGINE_MAINGAME;
+                    break;
+
+#if RETRO_USE_MOD_LOADER
+                case ENGINE_INITMODMENU:
+                    Engine.LoadGameConfig("Data/Game/GameConfig.bin");
+                    InitDevMenu();
+
+                    ResetCurrentStageFolder();
+
+                    SetupTextMenu(&gameMenu[0], 0);
+                    AddTextMenuEntry(&gameMenu[0], "MOD LIST");
+                    SetupTextMenu(&gameMenu[1], 0);
+                    InitMods();
+
+                    char buffer[0x100];
+                    for (int m = 0; m < modList.size(); ++m) {
+                        StrCopy(buffer, modList[m].name.c_str());
+                        StrAdd(buffer, ": ");
+                        StrAdd(buffer, modList[m].active ? "  Active" : "Inactive");
+                        AddTextMenuEntry(&gameMenu[1], buffer);
+                        gameMenu[1].entryHighlight[m] = false;
+                    }
+
+                    gameMenu[1].alignment      = 1;
+                    gameMenu[1].selectionCount = 3;
+                    gameMenu[1].selection1     = 0;
+                    if (gameMenu[1].rowCount > 18)
+                        gameMenu[1].visibleRowCount = 18;
+                    else
+                        gameMenu[1].visibleRowCount = 0;
+
+                    gameMenu[0].alignment        = 2;
+                    gameMenu[0].selectionCount   = 1;
+                    gameMenu[1].timer            = 0;
+                    gameMenu[1].visibleRowOffset = 0;
+                    stageMode                    = DEVMENU_MODMENU;
+                    break;
+#endif
+                default: break;
+            }
+        }
+    }
+
+    FlipScreen();
+    frameStep      = false;
+    Engine.message = MESSAGE_NONE;
+}
+#else
 void RetroEngine::Run()
 {
     unsigned long long targetFreq = SDL_GetPerformanceFrequency() / Engine.refreshRate;
@@ -533,6 +651,8 @@ void RetroEngine::Run()
     SDL_Quit();
 #endif
 }
+
+#endif // RETRO_PLATFORM == RETRO_PS1
 
 #if RETRO_USE_MOD_LOADER
 const tinyxml2::XMLElement *FirstXMLChildElement(tinyxml2::XMLDocument *doc, const tinyxml2::XMLElement *elementPtr, const char *name)
@@ -1120,6 +1240,33 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
                 cat = 2;
             FileRead(&fileBuffer, 1);
             stageListCount[cat] = fileBuffer;
+#if RETRO_PLATFORM == RETRO_PS1
+            // PS1: stageList is sized from the data (Scene.hpp); clamp instead of overflowing.
+            int count = stageListCount[cat];
+            if (count > STAGELIST_ENTRY_COUNT) {
+                stageListCount[cat] = STAGELIST_ENTRY_COUNT;
+                g_ps1StageListClamped = g_ps1StageListClamped + 1;
+            }
+            for (int s = 0; s < count; ++s) {
+                SceneInfo scratch;
+                SceneInfo *info = s < STAGELIST_ENTRY_COUNT ? &stageList[cat][s] : &scratch;
+                char str[0x100];
+                char *dst[3] = { info->folder, info->id, info->name };
+                int size[3]  = { sizeof(info->folder), sizeof(info->id), sizeof(info->name) };
+                for (int f = 0; f < 3; ++f) { // folder, id, name
+                    FileRead(&fileBuffer, 1);
+                    FileRead(str, fileBuffer);
+                    str[fileBuffer] = 0;
+                    if (fileBuffer >= size[f]) {
+                        str[size[f] - 1] = 0;
+                        g_ps1StageListClamped = g_ps1StageListClamped + 1;
+                    }
+                    StrCopy(dst[f], str);
+                }
+                FileRead(&fileBuffer, 1);
+                info->highlighted = fileBuffer;
+            }
+#else
             for (int s = 0; s < stageListCount[cat]; ++s) {
                 // Read Stage Folder
                 FileRead(&fileBuffer, 1);
@@ -1140,6 +1287,7 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
                 FileRead(&fileBuffer, 1);
                 stageList[cat][s].highlighted = fileBuffer;
             }
+#endif
         }
 
         CloseFile();

@@ -1,8 +1,16 @@
 #ifndef DRAWING3D_H
 #define DRAWING3D_H
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: Sonic CD's scripts set at most 256 vertices / 64 faces as constants (tools/bytecode_scan.py;
+// the title, PS000, builds its count with a loop: measured at runtime, g_ps1Scene3DMax*). Script
+// accesses and counts are clamped and counted (g_ps1Scene3DOverflow, Script.cpp).
+#define VERTEXBUFFER_SIZE (0x400)
+#define FACEBUFFER_SIZE   (0x100)
+#else
 #define VERTEXBUFFER_SIZE (0x1000)
 #define FACEBUFFER_SIZE   (0x400)
+#endif
 
 enum FaceFlags {
     FACE_FLAG_TEXTURED_3D = 0,

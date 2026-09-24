@@ -1,14 +1,25 @@
 #ifndef SCRIPT_H
 #define SCRIPT_H
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (2 MB): sized from the data (docs/28 phase 1): GS000 + the largest stage (R61D) = 69,993
+// script ints and 4,844 jump ints. LoadBytecode overflowing these is caught (g_ps1ScriptOverflow).
+#define SCRIPTDATA_COUNT (0x11400)
+#define JUMPTABLE_COUNT  (0x1400)
+#else
 #define SCRIPTDATA_COUNT (0x40000)
 #define JUMPTABLE_COUNT  (0x4000)
+#endif
 #define FUNCTION_COUNT   (0x200)
 
 #define JUMPSTACK_COUNT (0x400)
 #define FUNCSTACK_COUNT (0x400)
 
+#if RETRO_PLATFORM == RETRO_PS1
+#define RETRO_USE_COMPILER (0) // Sonic CD ships bytecode; the text compiler would only cost RAM
+#else
 #define RETRO_USE_COMPILER (1)
+#endif
 
 struct ScriptPtr {
     int scriptCodePtr;

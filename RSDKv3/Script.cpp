@@ -1,4 +1,36 @@
 #include "RetroEngine.hpp"
+
+#if RETRO_PLATFORM == RETRO_PS1
+// Scene3D buffers are PS1-sized (Scene3D.hpp): clamp script indices / counts, track the largest
+// seen and count overflows (for GDB; phase 7 sizes them for good).
+volatile uint32_t g_ps1Scene3DOverflow = 0;
+volatile int32_t g_ps1Scene3DMaxVertex = 0;
+volatile int32_t g_ps1Scene3DMaxFace   = 0;
+static inline int PS1Scene3DIndex(int i, int size, volatile int32_t *max)
+{
+    if (i > *max)
+        *max = i;
+    if ((uint)i < (uint)size)
+        return i;
+    g_ps1Scene3DOverflow = g_ps1Scene3DOverflow + 1;
+    return i < 0 ? 0 : size - 1;
+}
+#define PS1_VTX(i)        PS1Scene3DIndex(i, VERTEXBUFFER_SIZE, &g_ps1Scene3DMaxVertex)
+#define PS1_FACE(i)       PS1Scene3DIndex(i, FACEBUFFER_SIZE, &g_ps1Scene3DMaxFace)
+static inline int PS1Scene3DCount(int n, int size, volatile int32_t *max)
+{
+    if (n <= 0)
+        return n;
+    return PS1Scene3DIndex(n - 1, size, max) + 1;
+}
+#define PS1_VTX_COUNT(n)  PS1Scene3DCount(n, VERTEXBUFFER_SIZE, &g_ps1Scene3DMaxVertex)
+#define PS1_FACE_COUNT(n) PS1Scene3DCount(n, FACEBUFFER_SIZE, &g_ps1Scene3DMaxFace)
+#else
+#define PS1_VTX(i)        (i)
+#define PS1_FACE(i)       (i)
+#define PS1_VTX_COUNT(n)  (n)
+#define PS1_FACE_COUNT(n) (n)
+#endif
 #include <cmath>
 
 ObjectScript objectScriptList[OBJECT_COUNT];
@@ -2815,17 +2847,17 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     case VAR_VPARALLAXSCROLLPOS: scriptEng.operands[i] = vParallax.scrollPos[arrayVal]; break;
                     case VAR_3DSCENENOVERTICES: scriptEng.operands[i] = vertexCount; break;
                     case VAR_3DSCENENOFACES: scriptEng.operands[i] = faceCount; break;
-                    case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[arrayVal].x; break;
-                    case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[arrayVal].y; break;
-                    case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[arrayVal].z; break;
-                    case VAR_VERTEXBUFFERU: scriptEng.operands[i] = vertexBuffer[arrayVal].u; break;
-                    case VAR_VERTEXBUFFERV: scriptEng.operands[i] = vertexBuffer[arrayVal].v; break;
-                    case VAR_FACEBUFFERA: scriptEng.operands[i] = faceBuffer[arrayVal].a; break;
-                    case VAR_FACEBUFFERB: scriptEng.operands[i] = faceBuffer[arrayVal].b; break;
-                    case VAR_FACEBUFFERC: scriptEng.operands[i] = faceBuffer[arrayVal].c; break;
-                    case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[arrayVal].d; break;
-                    case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[arrayVal].flags; break;
-                    case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[arrayVal].colour; break;
+                    case VAR_VERTEXBUFFERX: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].x; break;
+                    case VAR_VERTEXBUFFERY: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].y; break;
+                    case VAR_VERTEXBUFFERZ: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].z; break;
+                    case VAR_VERTEXBUFFERU: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].u; break;
+                    case VAR_VERTEXBUFFERV: scriptEng.operands[i] = vertexBuffer[PS1_VTX(arrayVal)].v; break;
+                    case VAR_FACEBUFFERA: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].a; break;
+                    case VAR_FACEBUFFERB: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].b; break;
+                    case VAR_FACEBUFFERC: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].c; break;
+                    case VAR_FACEBUFFERD: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].d; break;
+                    case VAR_FACEBUFFERFLAG: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].flags; break;
+                    case VAR_FACEBUFFERCOLOR: scriptEng.operands[i] = faceBuffer[PS1_FACE(arrayVal)].colour; break;
                     case VAR_3DSCENEPROJECTIONX: scriptEng.operands[i] = projectionX; break;
                     case VAR_3DSCENEPROJECTIONY: scriptEng.operands[i] = projectionY; break;
                     case VAR_ENGINESTATE: scriptEng.operands[i] = Engine.gameMode; break;
@@ -3860,9 +3892,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
             case FUNC_TRANSFORMVERTICES:
                 opcodeSize = 0;
                 switch (scriptEng.operands[0]) {
-                    case MAT_WORLD: TransformVerticies(&matWorld, scriptEng.operands[1], scriptEng.operands[2]); break;
-                    case MAT_VIEW: TransformVerticies(&matView, scriptEng.operands[1], scriptEng.operands[2]); break;
-                    case MAT_TEMP: TransformVerticies(&matTemp, scriptEng.operands[1], scriptEng.operands[2]); break;
+                    case MAT_WORLD: TransformVerticies(&matWorld, PS1_VTX(scriptEng.operands[1]), PS1_VTX_COUNT(scriptEng.operands[2])); break;
+                    case MAT_VIEW: TransformVerticies(&matView, PS1_VTX(scriptEng.operands[1]), PS1_VTX_COUNT(scriptEng.operands[2])); break;
+                    case MAT_TEMP: TransformVerticies(&matTemp, PS1_VTX(scriptEng.operands[1]), PS1_VTX_COUNT(scriptEng.operands[2])); break;
                 }
                 break;
             case FUNC_CALLFUNCTION: {
@@ -3963,10 +3995,12 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 switch (scriptEng.operands[3]) {
                     case TILEINFO_INDEX:
                         tiles128x128.tileIndex[scriptEng.operands[6]]  = scriptEng.operands[0];
+#if RETRO_PLATFORM != RETRO_PS1
                         if (renderType == RENDER_SW)
                             tiles128x128.gfxDataPos[scriptEng.operands[6]] = scriptEng.operands[0] << 8;
                         else if (renderType == RENDER_HW)
                             tiles128x128.gfxDataPos[scriptEng.operands[6]] = (scriptEng.operands[0] << 2) & 0x3FFFC;
+#endif
                         break;
                     case TILEINFO_DIRECTION: tiles128x128.direction[scriptEng.operands[6]] = scriptEng.operands[0]; break;
                     case TILEINFO_VISUALPLANE: tiles128x128.visualPlane[scriptEng.operands[6]] = scriptEng.operands[0]; break;
@@ -4636,19 +4670,19 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     case VAR_VPARALLAXPARALLAXFACTOR: vParallax.parallaxFactor[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_VPARALLAXSCROLLSPEED: vParallax.scrollSpeed[arrayVal] = scriptEng.operands[i]; break;
                     case VAR_VPARALLAXSCROLLPOS: vParallax.scrollPos[arrayVal] = scriptEng.operands[i]; break;
-                    case VAR_3DSCENENOVERTICES: vertexCount = scriptEng.operands[i]; break;
-                    case VAR_3DSCENENOFACES: faceCount = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERX: vertexBuffer[arrayVal].x = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERY: vertexBuffer[arrayVal].y = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERZ: vertexBuffer[arrayVal].z = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERU: vertexBuffer[arrayVal].u = scriptEng.operands[i]; break;
-                    case VAR_VERTEXBUFFERV: vertexBuffer[arrayVal].v = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERA: faceBuffer[arrayVal].a = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERB: faceBuffer[arrayVal].b = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERC: faceBuffer[arrayVal].c = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERD: faceBuffer[arrayVal].d = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERFLAG: faceBuffer[arrayVal].flags = scriptEng.operands[i]; break;
-                    case VAR_FACEBUFFERCOLOR: faceBuffer[arrayVal].colour = scriptEng.operands[i]; break;
+                    case VAR_3DSCENENOVERTICES: vertexCount = PS1_VTX_COUNT(scriptEng.operands[i]); break;
+                    case VAR_3DSCENENOFACES: faceCount = PS1_FACE_COUNT(scriptEng.operands[i]); break;
+                    case VAR_VERTEXBUFFERX: vertexBuffer[PS1_VTX(arrayVal)].x = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERY: vertexBuffer[PS1_VTX(arrayVal)].y = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERZ: vertexBuffer[PS1_VTX(arrayVal)].z = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERU: vertexBuffer[PS1_VTX(arrayVal)].u = scriptEng.operands[i]; break;
+                    case VAR_VERTEXBUFFERV: vertexBuffer[PS1_VTX(arrayVal)].v = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERA: faceBuffer[PS1_FACE(arrayVal)].a = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERB: faceBuffer[PS1_FACE(arrayVal)].b = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERC: faceBuffer[PS1_FACE(arrayVal)].c = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERD: faceBuffer[PS1_FACE(arrayVal)].d = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERFLAG: faceBuffer[PS1_FACE(arrayVal)].flags = scriptEng.operands[i]; break;
+                    case VAR_FACEBUFFERCOLOR: faceBuffer[PS1_FACE(arrayVal)].colour = scriptEng.operands[i]; break;
                     case VAR_3DSCENEPROJECTIONX: projectionX = scriptEng.operands[i]; break;
                     case VAR_3DSCENEPROJECTIONY: projectionY = scriptEng.operands[i]; break;
                     case VAR_ENGINESTATE: Engine.gameMode = scriptEng.operands[i]; break;

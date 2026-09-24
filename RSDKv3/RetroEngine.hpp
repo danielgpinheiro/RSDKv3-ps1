@@ -102,7 +102,10 @@ typedef unsigned int uint;
 #define BASE_PATH            ""
 #define DEFAULT_SCREEN_XSIZE 320
 #define DEFAULT_FULLSCREEN   false
-#define RETRO_USING_OPENGL   (0) // the PS1 GPU backend is ours (ps1/)
+#define RETRO_USING_OPENGL   (0) // the PS1 GPU backend is ours (ps1/render.cpp)
+// Hosted builds get these transitively; the freestanding libc shims (ps1/libc) need them named.
+#include <ctype.h>
+#include <algorithm>
 #elif RETRO_PLATFORM == RETRO_VITA
 #define BASE_PATH            "ux0:data/SonicCD/"
 #define DEFAULT_SCREEN_XSIZE 480
@@ -501,6 +504,9 @@ public:
 
     void Init();
     void Run();
+#if RETRO_PLATFORM == RETRO_PS1
+    void RunFrame(); // one pass of Run()'s game loop; psyqo's frame() calls it (RSDKv3/main.cpp)
+#endif
 
     bool LoadGameConfig(const char *filepath);
 #if RETRO_USE_MOD_LOADER

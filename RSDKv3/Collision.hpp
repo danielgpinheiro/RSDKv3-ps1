@@ -59,7 +59,11 @@ enum EntityCollisionEffects {
 };
 
 #if !RETRO_USE_ORIGINAL_CODE
+#if RETRO_PLATFORM == RETRO_PS1
+#define DEBUG_HITBOX_COUNT (0x40) // PS1: dev-only hitbox overlay (showHitboxes); AddDebugHitbox bounds it
+#else
 #define DEBUG_HITBOX_COUNT (0x400)
+#endif
 
 struct DebugHitboxInfo {
     byte type;

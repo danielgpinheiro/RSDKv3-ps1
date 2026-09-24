@@ -3,13 +3,33 @@
 # Builds a .ps-exe via the psyqo toolchain (mipsel-none-elf, C++20), like the RSDKv2 port
 # (../RSDKv2-ps1/Makefile: the flags below come from there). Plan: ../docs/28.
 #
-# Phase 0: the PS1 platform layer (ps1/, copied from RSDKv2-ps1) + a smoke-test app
-# (ps1/platform_test.cpp). The RSDKv3 engine sources join SRCS in phase 2.
+# The RSDKv3 engine (RSDKv3/, PS1 app in RSDKv3/main.cpp) on the PS1 platform layer (ps1/, copied
+# from RSDKv2-ps1). `make PLATFORM_TEST=1`: the phase 0 smoke test (ps1/platform_test.cpp) instead.
 TARGET = rsdkv3
 TYPE = ps-exe
 
 SRCS = \
-ps1/platform_test.cpp \
+RSDKv3/Animation.cpp \
+RSDKv3/Collision.cpp \
+RSDKv3/Debug.cpp \
+RSDKv3/Ini.cpp \
+RSDKv3/Input.cpp \
+RSDKv3/Math.cpp \
+RSDKv3/ModAPI.cpp \
+RSDKv3/Object.cpp \
+RSDKv3/Palette.cpp \
+RSDKv3/Player.cpp \
+RSDKv3/Reader.cpp \
+RSDKv3/RetroEngine.cpp \
+RSDKv3/Scene.cpp \
+RSDKv3/Scene3D.cpp \
+RSDKv3/Script.cpp \
+RSDKv3/Sprite.cpp \
+RSDKv3/String.cpp \
+RSDKv3/Text.cpp \
+RSDKv3/Userdata.cpp \
+RSDKv3/Video.cpp \
+RSDKv3/main.cpp \
 ps1/libc/string.cpp \
 ps1/libc/stdlib.cpp \
 ps1/libc/math.cpp \
@@ -22,10 +42,22 @@ ps1/xa_music.cpp \
 ps1/mdec.cpp \
 ps1/video.cpp \
 ps1/loading.cpp \
+ps1/render.cpp \
+ps1/audio.cpp \
+
+# `make BOOT=<stage folder>` (e.g. R11A): start in that stage (test harness), scene id 1 unless
+# BOOT_ID is given. Rebuild RSDKv3/main.cpp when switching (touch it).
+ifneq ($(BOOT),)
+CPPFLAGS += -DPS1_BOOT_FOLDER='"$(BOOT)"' -DPS1_BOOT_ID='"$(or $(BOOT_ID),1)"'
+endif
+
+ifeq ($(PLATFORM_TEST),1)
+SRCS := ps1/platform_test.cpp $(filter-out RSDKv3/%,$(SRCS))
+endif
 
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any
 # system headers the freestanding toolchain might otherwise surface.
-CPPFLAGS = -I ps1/libc -I RSDKv3
+CPPFLAGS = -I ps1/libc -I RSDKv3 -DRETRO_USE_MOD_LOADER=0
 
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)

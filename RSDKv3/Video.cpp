@@ -1,4 +1,30 @@
 #include "RetroEngine.hpp"
+
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 port: no Theora at runtime. The .ogv videos become MDEC/STR streams at build time and play
+// through ps1/video.cpp (docs/28 phase 6); until then the engine sees "no video".
+int currentVideoFrame = 0;
+int videoFrameCount   = 0;
+int videoWidth        = 0;
+int videoHeight       = 0;
+float videoAR         = 0;
+THEORAPLAY_Decoder *videoDecoder         = nullptr;
+const THEORAPLAY_VideoFrame *videoVidData = nullptr;
+THEORAPLAY_Io callbacks;
+byte videoSurface = 0;
+int videoFilePos  = 0;
+int videoPlaying  = 0;
+int vidFrameMS    = 0;
+int vidBaseticks  = 0;
+bool videoSkipped = false;
+
+void PlayVideoFile(char *filePath) {}
+void UpdateVideoFrame() {}
+int ProcessVideo() { return 1; } // 1 = finished: ENGINE_VIDEOWAIT returns to the game
+void StopVideoPlayback() {}
+void SetupVideoBuffer(int width, int height) {}
+void CloseVideoBuffer() {}
+#else
 #include <string>
 #include <vector>
 
@@ -370,3 +396,4 @@ void CloseVideoBuffer()
 #endif
     }
 }
+#endif // RETRO_PLATFORM != RETRO_PS1

@@ -1,4 +1,21 @@
 #include "RetroEngine.hpp"
+
+#if RETRO_PLATFORM == RETRO_PS1
+// Layer rows past TILELAYER_CHUNK_H (PS1-sized, Scene.hpp) are read into a scratch row so the file
+// position stays right; counted for GDB until the Credits FG (128 rows) gets its own handling.
+volatile uint32_t g_ps1LayerRowsClamped = 0;
+static ushort s_ps1LayerScratchRow[TILELAYER_CHUNK_W];
+static ushort *PS1LayerRow(int layer, int y)
+{
+    if (y < TILELAYER_CHUNK_H)
+        return &stageLayouts[layer].tiles[y * 0x100];
+    g_ps1LayerRowsClamped = g_ps1LayerRowsClamped + 1;
+    return s_ps1LayerScratchRow;
+}
+#define PS1_LAYER_ROW(layer, y) PS1LayerRow(layer, y)
+#else
+#define PS1_LAYER_ROW(layer, y) (&stageLayouts[layer].tiles[(y) * 0x100])
+#endif
 #include <stdlib.h>
 
 int stageListCount[STAGELIST_MAX];
@@ -8,7 +25,7 @@ char stageListNames[STAGELIST_MAX][0x20] = {
     "Bonus Stages",
     "Special Stages",
 };
-SceneInfo stageList[STAGELIST_MAX][0x100];
+SceneInfo stageList[STAGELIST_MAX][STAGELIST_ENTRY_COUNT];
 
 int stageMode = STAGEMODE_LOAD;
 
@@ -77,9 +94,11 @@ LineScroll vParallax;
 Tiles128x128 tiles128x128;
 CollisionMasks collisionMasks[2];
 
+#if RETRO_PLATFORM != RETRO_PS1
 byte tilesetGFXData[TILESET_SIZE];
 
 ushort tile3DFloorBuffer[0x100 * 0x100];
+#endif
 bool drawStageGFXHQ = false;
 
 #if RETRO_USE_MOD_LOADER
@@ -200,8 +219,10 @@ void ProcessStage(void)
                         texBufferMode = 1;
                 }
 
+#if RETRO_PLATFORM != RETRO_PS1
                 if (tilesetGFXData[0x32002] > 0)
                     texBufferMode = 0;
+#endif
 
                 if (texBufferMode) {  // 3D Sky/HParallax version
                     for (int i = 0; i < TILEUV_SIZE; i += 4) {
@@ -569,6 +590,7 @@ void LoadStageFiles(void)
             }
             CloseFile();
         }
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: the stage's tiles are uploaded to VRAM pre-converted (phase 3)
         FileInfo info;
         if (LoadStageFile("16x16Tiles.gif", stageListPosition, &info)) {
             CloseFile();
@@ -577,6 +599,7 @@ void LoadStageFiles(void)
         else {
             LoadStageGFXFile(stageListPosition);
         }
+#endif
         LoadStageCollisions();
         LoadStageBackground();
     }
@@ -592,7 +615,9 @@ void LoadStageFiles(void)
         objectEntityList[i].scale     = 512;
     }
     LoadActLayout();
+#if RETRO_PLATFORM != RETRO_PS1
     Init3DFloorBuffer(0);
+#endif
     ProcessStartupObjects();
     xScrollA = (playerList[0].XPos >> 16) - SCREEN_CENTERX;
     xScrollB = (playerList[0].XPos >> 16) - SCREEN_CENTERX + SCREEN_XSIZE;
@@ -653,11 +678,11 @@ void LoadActLayout()
         newXBoundary2 = stageLayouts[0].xsize << 7;
         newYBoundary2 = stageLayouts[0].ysize << 7;
 
-        for (int i = 0; i < 0x10000; ++i) stageLayouts[0].tiles[i] = 0;
+        for (int i = 0; i < TILELAYER_CHUNK_COUNT; ++i) stageLayouts[0].tiles[i] = 0; // was 0x10000 (PC size)
 
         byte fileBuffer = 0;
         for (int y = 0; y < stageLayouts[0].ysize; ++y) {
-            ushort *tiles = &stageLayouts[0].tiles[(y * 0x100)];
+            ushort *tiles = PS1_LAYER_ROW(0, y);
             for (int x = 0; x < stageLayouts[0].xsize; ++x) {
                 FileRead(&fileBuffer, 1);
                 tiles[x] = fileBuffer << 8;
@@ -790,7 +815,7 @@ void LoadStageBackground()
 
             memset(stageLayouts[i].tiles, 0, TILELAYER_CHUNK_COUNT * sizeof(ushort));
             byte *lineScrollPtr = stageLayouts[i].lineScroll;
-            memset(stageLayouts[i].lineScroll, 0, 0x7FFF);
+            memset(stageLayouts[i].lineScroll, 0, TILELAYER_SCROLL_COUNT); // was 0x7FFF (PC size)
 
             // Read Line Scroll
             byte buf[3];
@@ -815,7 +840,7 @@ void LoadStageBackground()
 
             // Read Layout
             for (int y = 0; y < stageLayouts[i].ysize; ++y) {
-                ushort *chunks = &stageLayouts[i].tiles[y * 0x100];
+                ushort *chunks = PS1_LAYER_ROW(i, y);
                 for (int x = 0; x < stageLayouts[i].xsize; ++x) {
                     FileRead(&fileBuffer, 1);
                     *chunks = fileBuffer << 8;
@@ -847,10 +872,12 @@ void LoadStageChunks()
 
             tiles128x128.tileIndex[i] = entry[1] + (entry[0] << 8);
 
+#if RETRO_PLATFORM != RETRO_PS1
             if (renderType == RENDER_SW)
                 tiles128x128.gfxDataPos[i] = tiles128x128.tileIndex[i] << 8;
             else if (renderType == RENDER_HW)
                 tiles128x128.gfxDataPos[i] = tiles128x128.tileIndex[i] << 2;
+#endif
 
             tiles128x128.collisionFlags[0][i] = entry[2] >> 4;
             tiles128x128.collisionFlags[1][i] = entry[2] - ((entry[2] >> 4) << 4);
@@ -1028,6 +1055,7 @@ void LoadStageCollisions()
         CloseFile();
     }
 }
+#if RETRO_PLATFORM != RETRO_PS1
 void LoadStageGIFFile(int stageID)
 {
     FileInfo info;
@@ -1142,6 +1170,7 @@ void LoadStageGFXFile(int stageID)
         CloseFile();
     }
 }
+#endif
 
 void ResetBackgroundSettings()
 {

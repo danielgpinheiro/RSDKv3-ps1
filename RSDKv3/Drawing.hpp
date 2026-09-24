@@ -3,7 +3,11 @@
 
 // #define SURFACE_COUNT (24)
 #define SURFACE_COUNT (32) // originally 24, updated to 32 in sega forever vers
+#if RETRO_PLATFORM == RETRO_PS1
+#define GFXDATA_SIZE  (0x10) // PS1: sprite pixels are in VRAM (atlas), never in RAM
+#else
 #define GFXDATA_SIZE  (0x800 * 0x800)
+#endif
 
 // usually 7, but origins has an extra one for some reason
 #define DRAWLAYER_COUNT (8)

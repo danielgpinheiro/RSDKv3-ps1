@@ -329,6 +329,7 @@ bool getControllerButton(byte buttonID)
 }
 #endif //! RETRO_USING_SDL2
 
+#if RETRO_PLATFORM != RETRO_PS1 // SDL controller hot-plug (the PS1 pad: psyqo AdvancedPad, phase 4)
 void ControllerInit(byte controllerID)
 {
     SDL_GameController *controller = SDL_GameControllerOpen(controllerID);
@@ -350,6 +351,10 @@ void ControllerClose(byte controllerID)
         inputType = 0;
     }
 }
+#else
+void ControllerInit(byte controllerID) {}
+void ControllerClose(byte controllerID) {}
+#endif
 
 void ProcessInput()
 {

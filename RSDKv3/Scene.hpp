@@ -13,8 +13,14 @@
 #define TILE_DATASIZE (TILE_SIZE * TILE_SIZE)
 #define TILESET_SIZE  (TILE_COUNT * TILE_DATASIZE)
 
-#define TILELAYER_CHUNK_W      (0x100)
+#define TILELAYER_CHUNK_W      (0x100) // the row stride (y * 0x100) is hard-coded in the engine: keep it
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 (2 MB): regular stages' layers are <= 18 chunks tall (docs/28 phase 1); taller rows (the
+// Credits FG, 128) are clamped at load and counted (g_ps1LayerRowsClamped) until handled.
+#define TILELAYER_CHUNK_H      (0x14)
+#else
 #define TILELAYER_CHUNK_H      (0x100)
+#endif
 #define TILELAYER_CHUNK_COUNT  (TILELAYER_CHUNK_W * TILELAYER_CHUNK_H)
 #define TILELAYER_SCROLL_COUNT (TILELAYER_CHUNK_H * CHUNK_SIZE)
 
@@ -71,12 +77,25 @@ enum CameraStyles {
     CAMERASTYLE_HLOCKED,
 };
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1: sized from Sonic CD's GameConfig (lists of 9 / 70 / 8 / 0 stages; folder <= 7, id <= 1,
+// name <= 26 chars): 16 KB instead of 197 KB. LoadGameConfig clamps (g_ps1StageListClamped).
+#define STAGELIST_ENTRY_COUNT (0x50)
+struct SceneInfo {
+    char name[0x20];
+    char folder[0x10];
+    char id[0x10];
+    bool highlighted;
+};
+#else
+#define STAGELIST_ENTRY_COUNT (0x100)
 struct SceneInfo {
     char name[0x40];
     char folder[0x40];
     char id[0x40];
     bool highlighted;
 };
+#endif
 
 struct CollisionMasks {
     sbyte floorMasks[TILE_COUNT * TILE_SIZE];
@@ -114,7 +133,9 @@ struct LineScroll {
 };
 
 struct Tiles128x128 {
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: derived from tileIndex by the renderer (saves 128 KB)
     int gfxDataPos[CHUNKTILE_COUNT];
+#endif
     ushort tileIndex[CHUNKTILE_COUNT];
     byte direction[CHUNKTILE_COUNT];
     byte visualPlane[CHUNKTILE_COUNT];
@@ -123,7 +144,7 @@ struct Tiles128x128 {
 
 extern int stageListCount[STAGELIST_MAX];
 extern char stageListNames[STAGELIST_MAX][0x20];
-extern SceneInfo stageList[STAGELIST_MAX][0x100];
+extern SceneInfo stageList[STAGELIST_MAX][STAGELIST_ENTRY_COUNT];
 
 extern int stageMode;
 
@@ -194,9 +215,13 @@ extern LineScroll vParallax;
 extern Tiles128x128 tiles128x128;
 extern CollisionMasks collisionMasks[2];
 
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: tile pixels live only in VRAM (phase 3), never in RAM
 extern byte tilesetGFXData[TILESET_SIZE];
+#endif
 
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: software 3D floor buffer; the GTE floor is phase 7
 extern ushort tile3DFloorBuffer[0x100 * 0x100];
+#endif
 extern bool drawStageGFXHQ;
 
 void InitFirstStage();
@@ -226,6 +251,7 @@ void LoadStageCollisions();
 void LoadStageGIFFile(int stageID);
 void LoadStageGFXFile(int stageID);
 
+#if RETRO_PLATFORM != RETRO_PS1
 inline void Init3DFloorBuffer(int layerID)
 {
     for (int y = 0; y < TILELAYER_CHUNK_H; ++y) {
@@ -237,15 +263,24 @@ inline void Init3DFloorBuffer(int layerID)
     }
 }
 
+#endif
+
 inline void Copy16x16Tile(ushort dest, ushort src)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: tiles are in VRAM; the phase 3 renderer implements this as a tile remap / VRAM copy.
+    return;
+#endif
+#if RETRO_PLATFORM != RETRO_PS1
     if (renderType == RENDER_SW) {
         byte *destPtr = &tilesetGFXData[TILELAYER_CHUNK_W * dest];
         byte *srcPtr  = &tilesetGFXData[TILELAYER_CHUNK_W * src];
         int cnt       = TILE_DATASIZE;
         while (cnt--) *destPtr++ = *srcPtr++;
     }
-    else if (renderType == RENDER_HW) {
+    else
+#endif
+    if (renderType == RENDER_HW) {
         tileUVArray[4 * dest + 0] = tileUVArray[4 * src + 0];
         tileUVArray[4 * dest + 1] = tileUVArray[4 * src + 1];
         tileUVArray[4 * dest + 2] = tileUVArray[4 * src + 2];

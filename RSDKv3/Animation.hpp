@@ -3,7 +3,11 @@
 
 #define ANIFILE_COUNT     (0x100)
 #define ANIMATION_COUNT   (0x400)
+#if RETRO_PLATFORM == RETRO_PS1
+#define SPRITEFRAME_COUNT (0x400) // PS1: the busiest stage uses 684 frames in total (docs/28 phase 1)
+#else
 #define SPRITEFRAME_COUNT (0x1000)
+#endif
 
 #define HITBOX_COUNT     (0x20)
 #define HITBOX_DIR_COUNT (0x8)

@@ -222,6 +222,12 @@ int AddGraphicsFile(const char *filePath)
         if (++sheetID == SURFACE_COUNT) // Max Sheet cnt
             return 0;
     }
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: sprite pixels live only in VRAM (the per-stage atlas, tools/atlas; bound in phase 3).
+    // Register the name; never decode an image at runtime (golden rule).
+    StrCopy(gfxSurface[sheetID].fileName, sheetPath);
+    return sheetID;
+#endif
     byte fileExtension = (byte)sheetPath[(StrLength(sheetPath) - 1) & 0xFF];
     switch (fileExtension) {
         case 'f': LoadGIFFile(sheetPath, sheetID); break;
@@ -235,6 +241,14 @@ int AddGraphicsFile(const char *filePath)
 }
 void RemoveGraphicsFile(const char *filePath, int sheetID)
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1: no pixel data in RAM to compact (the PC path below moves graphicData with the literal
+    // 0x200000). Forget the name(s) only.
+    for (int s = 0; s < SURFACE_COUNT; ++s)
+        if (s == sheetID || (sheetID < 0 && StrComp(gfxSurface[s].fileName, filePath)))
+            gfxSurface[s].fileName[0] = 0;
+    return;
+#endif
     if (sheetID < 0) {
         for (int i = 0; i < SURFACE_COUNT; ++i) {
             if (StrLength(gfxSurface[i].fileName) > 0 && StrComp(gfxSurface[i].fileName, filePath))
