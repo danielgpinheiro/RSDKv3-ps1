@@ -1324,7 +1324,11 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
         }
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+        if (strlen(Engine.startSceneFolder)) { // PS1 `make BOOT=`: the id is optional
+#else
         if (strlen(Engine.startSceneFolder) && strlen(Engine.startSceneID)) {
+#endif
 #if RETRO_PLATFORM == RETRO_PS1
             // PS1 (`make BOOT=`): start at the scene's real list position when GameConfig has it —
             // Sonic CD's time travel offsets stage.listPos within the regular list — else in the
@@ -1332,7 +1336,8 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
             bool found = false;
             for (int l = 0; l < STAGELIST_MAX && !found; ++l) {
                 for (int p = 0; p < stageListCount[l]; ++p) {
-                    if (StrComp(stageList[l][p].folder, Engine.startSceneFolder) && StrComp(stageList[l][p].id, Engine.startSceneID)) {
+                    if (StrComp(stageList[l][p].folder, Engine.startSceneFolder)
+                        && (!Engine.startSceneID[0] || StrComp(stageList[l][p].id, Engine.startSceneID))) { // no id: first entry of the folder
                         startList_Game  = l;
                         startStage_Game = p;
                         found           = true;
@@ -1344,7 +1349,7 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
                 SceneInfo *scene = &stageList[STAGELIST_BONUS][STAGELIST_ENTRY_COUNT - 1];
                 strcpy(scene->name, "_RSDK_SCENE");
                 strcpy(scene->folder, Engine.startSceneFolder);
-                strcpy(scene->id, Engine.startSceneID);
+                strcpy(scene->id, Engine.startSceneID[0] ? Engine.startSceneID : "1");
                 startList_Game  = STAGELIST_BONUS;
                 startStage_Game = STAGELIST_ENTRY_COUNT - 1;
             }

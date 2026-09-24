@@ -208,7 +208,10 @@ int main(int argc, char **argv) {
                 AnimationFile *af = &animationFileList[a];
                 for (int an = 0; an < af->animCount; ++an) {
                     SpriteAnimation *anim = &animationList[af->aniListOffset + an];
-                    for (int i = 0; i < anim->frameCount; ++i) {
+                    // ROTSTYLE_STATICFRAMES: LoadAnimationFile halves frameCount; the second half holds the
+                    // pre-rotated (45 degree) frames DrawObjectAnimation draws as frame + frameCount.
+                    int n = anim->frameCount * (anim->rotationStyle == ROTSTYLE_STATICFRAMES ? 2 : 1);
+                    for (int i = 0; i < n; ++i) {
                         SpriteFrame *fr = &animFrames[anim->frameListOffset + i];
                         fprintf(f, "frame %d %d %d %d %d ani %s\n", fr->sheetID, fr->sprX, fr->sprY, fr->width, fr->height,
                                 af->fileName);

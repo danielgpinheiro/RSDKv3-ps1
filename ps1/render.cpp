@@ -74,6 +74,7 @@ volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, 
 volatile uint32_t g_ps1ProfSlot[4]    = {}; // this frame: hblanks per draw slot (layerID 0-3)
 volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped / partial quads or sprites (slow path)
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
+volatile int32_t g_ps1MissSheet = -1, g_ps1MissX = 0, g_ps1MissY = 0; // the last miss (atlas sheet, texel)
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
 volatile uint32_t g_ps1DrawTodo       = 0; // draw calls of later steps (ink effects, faces, text...), skipped
 volatile uint32_t g_ps1SurfaceGen     = 1; // bumped by Sprite.cpp when a sheet name is (un)registered
@@ -264,6 +265,7 @@ static const PS1AtlasCluster *PS1FindCluster(int sheet, int x, int y)
         }
     }
     g_ps1AtlasDrawMiss = g_ps1AtlasDrawMiss + 1;
+    g_ps1MissSheet = sheet, g_ps1MissX = x, g_ps1MissY = y;
     return nullptr;
 }
 
