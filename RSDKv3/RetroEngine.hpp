@@ -49,13 +49,21 @@ typedef unsigned int uint;
 #define RETRO_VITA (7)
 #define RETRO_UWP  (8)
 #define RETRO_LINUX (9)
+#define RETRO_PS1   (10) // PlayStation port (docs/28)
 
 // Platform types (Game manages platform-specific code such as HUD position using this rather than the above)
 #define RETRO_STANDARD (0)
 #define RETRO_MOBILE   (1)
 
 // use this macro (RETRO_PLATFORM) to define platform specific code blocks and etc to run the engine
-#if defined _WIN32
+#if defined RETRO_PS1_HOST_TOOL
+// Host-side PS1 build tools (tools/rsdkmanifest, ...): engine code compiled for the Mac with the
+// PS1 configuration (same array sizes, SDL off) so outputs match the console. Both builds pass
+// -DRETRO_USE_MOD_LOADER=0 (the mod loader needs <regex>/std::filesystem, included above).
+#define RETRO_PLATFORM (RETRO_PS1)
+#elif defined __mips__
+#define RETRO_PLATFORM (RETRO_PS1)
+#elif defined _WIN32
 #if defined WINAPI_FAMILY
 #if WINAPI_FAMILY != WINAPI_FAMILY_APP
 #define RETRO_PLATFORM (RETRO_WIN)
@@ -89,7 +97,13 @@ typedef unsigned int uint;
 #define RETRO_PLATFORM (RETRO_WIN) // Default
 #endif
 
-#if RETRO_PLATFORM == RETRO_VITA
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 port: 320 px (user decision, docs/28; the Sega CD original was 320x224).
+#define BASE_PATH            ""
+#define DEFAULT_SCREEN_XSIZE 320
+#define DEFAULT_FULLSCREEN   false
+#define RETRO_USING_OPENGL   (0) // the PS1 GPU backend is ours (ps1/)
+#elif RETRO_PLATFORM == RETRO_VITA
 #define BASE_PATH            "ux0:data/SonicCD/"
 #define DEFAULT_SCREEN_XSIZE 480
 #define DEFAULT_FULLSCREEN   true
@@ -190,14 +204,18 @@ typedef unsigned int uint;
 #endif
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+#define RETRO_USE_HAPTICS (0)
+#else
 #define RETRO_USE_HAPTICS (1)
+#endif
 
 #if RETRO_PLATFORM <= RETRO_WP7
 #define RETRO_GAMEPLATFORMID (RETRO_PLATFORM)
 #else
 
 // use *this* macro to determine what platform the game thinks its running on (since only the first 7 platforms are supported natively by scripts)
-#if RETRO_PLATFORM == RETRO_VITA
+#if RETRO_PLATFORM == RETRO_VITA || RETRO_PLATFORM == RETRO_PS1 // scripts take their PC/console paths
 #define RETRO_GAMEPLATFORMID (RETRO_WIN)
 #elif RETRO_PLATFORM == RETRO_UWP
 #define RETRO_GAMEPLATFORMID (UAP_GetRetroGamePlatformId())

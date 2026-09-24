@@ -3,10 +3,24 @@
 
 #include <stdlib.h>
 
+#if RETRO_PLATFORM != RETRO_PS1
 #include <vorbis/vorbisfile.h>
+#endif
 
-#if RETRO_PLATFORM != RETRO_VITA && RETRO_PLATFORM != RETRO_OSX
+#if RETRO_PLATFORM != RETRO_VITA && RETRO_PLATFORM != RETRO_OSX && RETRO_PLATFORM != RETRO_PS1
 #include "SDL.h"
+#endif
+
+// PS1 port: no Ogg/SDL at runtime (music is CD-XA, SFX are SPU-ADPCM; docs/28 phase 5). These
+// stand-ins keep the data structures and the inline helpers compiling (as in the RSDKv2 port).
+#if RETRO_PLATFORM == RETRO_PS1
+#include <stdint.h>
+typedef int16_t Sint16;
+typedef int32_t Sint32;
+typedef uint8_t Uint8;
+typedef uint16_t Uint16;
+typedef struct { int unused; } OggVorbis_File;
+#define ov_clear(f) ((void)0)
 #endif
 
 #if RETRO_USING_SDL1 || RETRO_USING_SDL2
@@ -134,9 +148,10 @@ inline void FreeMusInfo()
     UnlockAudioDevice();
 }
 #else
-void ProcessMusicStream() {}
-void ProcessAudioPlayback() {}
-void ProcessAudioMixing() {}
+// inline: defined in a header (upstream had plain definitions here, one per including file).
+inline void ProcessMusicStream() {}
+inline void ProcessAudioPlayback() {}
+inline void ProcessAudioMixing() {}
 
 inline void FreeMusInfo() { ov_clear(&streamInfo[currentStreamIndex].vorbisFile); }
 #endif

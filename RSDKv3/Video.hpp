@@ -1,7 +1,18 @@
 #ifndef VIDEO_H
 #define VIDEO_H
 
+#if RETRO_PLATFORM == RETRO_PS1
+// PS1 port: the .ogv videos become MDEC/STR streams at build time (docs/28 phase 6); no Theora at
+// runtime. Opaque stand-ins keep the declarations below compiling.
+struct THEORAPLAY_Decoder;
+struct THEORAPLAY_VideoFrame;
+struct THEORAPLAY_AudioPacket;
+struct THEORAPLAY_Io {
+    void *userdata;
+};
+#else
 #include "theoraplay.h"
+#endif
 
 extern int currentVideoFrame;
 extern int videoFrameCount;

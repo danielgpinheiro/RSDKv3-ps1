@@ -6,5 +6,7 @@ describes it; the Nexus-era notes in them still apply unless changed here.
 
 Differences from the RSDKv2 copy:
 - `loading_icon.h` is generated from `PS1/Memcard icons/sonic-1-loading.gif` (Sonic running,
-  4 frames, reduced to 48x48 cells, 83 ms/frame) by `tools/loading/build_icon.py`.
+  4 frames, reduced to 48x48 cells, 83 ms/frame) by `tools/loading/build_icon.py`. Artwork:
+  "Sonic Running" GIF by Salmon270 on Tenor
+  (https://tenor.com/en-GB/view/sonic-running-run-fast-gotta-go-fast-pixel-art-gif-16947491).
 - `platform_test.cpp` (phase 0 smoke test) replaces the engine's `main.cpp` until phase 2.
