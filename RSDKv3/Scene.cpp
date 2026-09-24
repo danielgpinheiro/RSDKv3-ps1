@@ -5,6 +5,7 @@
 #include "../ps1/sprite_atlas.hh"
 #include "../ps1/tileset.hh"
 void PS1BuildTileVisuals(); // ps1/render.cpp
+void PS1LoadBGStrips(const char *folder, int player);
 #include "../ps1/video.hh"
 
 // Headless CPU profile of the NORMAL stage mode (hblanks of the last frame; GDB, tools/*_test.sh).
@@ -622,6 +623,7 @@ void LoadStageFiles(void)
             if (PS1TileSetLoad(stageList[activeStageList][stageListPosition].folder, pal))
                 for (int c = 0x80; c < 0x100; ++c) SetPaletteEntry(-1, c, pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]);
             PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder, playerListPos);
+            PS1LoadBGStrips(stageList[activeStageList][stageListPosition].folder, playerListPos); // after the atlas (shares its VRAM)
         }
 #else
         FileInfo info;

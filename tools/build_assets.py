@@ -6,6 +6,7 @@ Steps (golden rule: nothing is decoded at runtime; every converter checks its ow
   2. manifest tools/rsdkmanifest (host build of the engine's bytecode VM) -> build/manifest/*.txt
   3. atlas    tools/atlas/build_atlas.py -> Data/Sprites/Atlas/<Stage>.atl (per-stage VRAM sprites)
   4. tiles    tools/tiles/convert_tiles.py -> Data/Stages/*/16x16Tiles.vram (VRAM tile pages)
+  5. strips   tools/bgstrips/build_bgstrips.py -> Data/Stages/*/BGStrips[_t].bin (BG line strips, per player)
 The PC source files stay in the tree (.gif .wav .ogg); tools/disc/build_disc.py leaves them off the
 disc. Later phases add audio (SPU-ADPCM, CD-XA) and video (STR) steps.
 
@@ -72,6 +73,8 @@ def main():
             sys.exit('atlas failed:\n' + '\n'.join(unexpected or [r.stdout[-2000:], r.stderr[-2000:]]))
 
     run('4 tiles', [PY, os.path.join(HERE, 'tiles', 'convert_tiles.py'), data])
+    r = run('5 bgstrips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data], capture_output=True, text=True)
+    print('[5 bgstrips] %d files (self-checked), per player' % sum(1 for l in r.stdout.splitlines() if ' regions ' in l and ' regions  0 ' not in l))
     print('assets ready in %s' % data)
 
 

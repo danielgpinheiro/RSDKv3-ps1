@@ -35,6 +35,23 @@ def main():
         bad += not np.array_equal(vram[y:y + h, x:x + w], blk)
     ok &= bad == 0
     print('atlas: %d blocks, %d different' % (blocks, bad))
+    import os
+    sp = '%s/Stages/%s/BGStrips%s.bin' % (data, stage, '_t' if atlas.endswith('_t') else '')
+    if os.path.exists(sp):  # BG line strips (tools/bgstrips): every piece vs its VRAM rectangle
+        d = open(sp, 'rb').read()
+        count, = struct.unpack_from('<H', d, 4)
+        off, sbad, spieces = 8 + count * 64, 0, 0
+        for i in range(count):
+            e = d[8 + 64 * i:8 + 64 * (i + 1)]
+            lines, npieces = struct.unpack_from('<H', e, 4)[0], e[8]
+            for k in range(npieces):
+                x, y, w = struct.unpack_from('<HHH', e, 10 + 6 * k)
+                blk = np.frombuffer(d, '<u2', lines * w // 2, off).reshape(lines, w // 2)
+                off += lines * w
+                sbad += not np.array_equal(vram[y:y + lines, x:x + w // 2], blk)
+                spieces += 1
+        ok &= sbad == 0
+        print('strips: %d regions, %d pieces, %d different' % (count, spieces, sbad))
     if len(sys.argv) > 4:
         got = open(sys.argv[4], 'rb').read()
         diff = [c for c in range(0x80, 0x100) if got[c * 3:c * 3 + 3] != pal[c * 3:c * 3 + 3]]
