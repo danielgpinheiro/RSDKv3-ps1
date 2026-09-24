@@ -295,3 +295,12 @@ android/local.properties
 .flatpak-builder
 flatpak/*.apk
 build-dir
+
+# --- PS1 port build artifacts ---
+*.o
+*.dep
+rsdkv3.ps-exe
+rsdkv3.elf
+rsdkv3.map
+build/
+__pycache__/
