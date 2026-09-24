@@ -68,6 +68,7 @@ volatile uint32_t g_ps1DrawSprites    = 0; // atlas sprite pieces chained this f
 volatile uint32_t g_ps1DrawQuads      = 0; // textured quads chained this frame (flip / scale / rotation)
 volatile uint32_t g_ps1LayerPrims     = 0; // tile-layer primitives chained this frame
 volatile uint32_t g_ps1LayerHbl       = 0; // CPU time of this frame's tile layers (hblanks)
+volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
 volatile uint32_t g_ps1DrawTodo       = 0; // draw calls of later steps (ink effects, faces, text...), skipped
@@ -146,6 +147,7 @@ static void PS1FrameStart(bool clear)
     s_frameOpen      = true;
     s_frameFresh     = clear;
     g_ps1DrawSprites = g_ps1DrawQuads = g_ps1LayerPrims = g_ps1LayerHbl = 0;
+    for (int i = 0; i < 5; ++i) g_ps1ProfLayer[i] = 0;
     if (clear) {
         PS1ChainClear(0, 0, 0);
         g_ps1DrawFrames = g_ps1DrawFrames + 1;
@@ -786,6 +788,7 @@ static short s_lineX[SCREEN_YSIZE];
 void DrawHLineScrollLayer(int layerID)
 {
     uint32_t t0      = PS1Hblanks();
+    g_ps1ProfLayer[4] = g_ps1ProfLayer[4] + 1;
     TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
     int layerwidth   = layer->xsize;
     int layerheight  = layer->ysize;
@@ -841,7 +844,29 @@ void DrawHLineScrollLayer(int layerID)
         tileYPos += layerheight << 7;
     tileYPos %= fullH;
 
+    // The FG without deformation scrolls every line by xScrollOffset (upstream sets every
+    // hParallax.linePos to it above): one band per tile row, no per-line pass (the Nexus fast path).
+    bool uniform = !activeTileLayers[layerID];
+    for (int i = 0; i < PARALLAX_COUNT && uniform; ++i) uniform = !hParallax.deform[i];
     int ly = tileYPos;
+    if (uniform) {
+        int chunkX = xScrollOffset % fullW;
+        if (chunkX < 0)
+            chunkX += fullW;
+        for (int y = 0; y < SCREEN_YSIZE;) {
+            int h = TILE_SIZE - (ly & 0xF);
+            if (h > SCREEN_YSIZE - y)
+                h = SCREEN_YSIZE - y;
+            PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
+            y += h;
+            ly += h;
+            if (ly >= fullH)
+                ly -= fullH;
+        }
+        g_ps1LayerHbl     = g_ps1LayerHbl + PS1HblanksSince(t0);
+        g_ps1ProfLayer[0] = g_ps1ProfLayer[0] + PS1HblanksSince(t0);
+        return;
+    }
     for (int y = 0; y < SCREEN_YSIZE; ++y) {
         byte idx   = layer->lineScroll[ly];
         int chunkX = hParallax.linePos[idx];
@@ -864,6 +889,9 @@ void DrawHLineScrollLayer(int layerID)
             ly = 0;
     }
 
+    uint32_t t1             = PS1Hblanks();
+    g_ps1ProfLayer[1]       = g_ps1ProfLayer[1] + PS1HblanksSince(t0);
+    uint32_t tTiles         = 0;
     int stripBands          = 0;
     int layerIdx            = activeTileLayers[layerID];
     const uint8_t *stripRow = s_stripCount && layerIdx < LAYER_COUNT ? s_stripRow[layerIdx][above] : nullptr;
@@ -882,13 +910,17 @@ void DrawHLineScrollLayer(int layerID)
         else {
             int rowLeft = TILE_SIZE - (ly & 0xF);
             while (h < rowLeft && y + h < SCREEN_YSIZE && s_lineX[y + h] == chunkX) ++h;
+            uint32_t tb = PS1Hblanks();
             PS1DrawTileBand(layer, above, y, h, ly, chunkX, fullW);
+            tTiles += PS1HblanksSince(tb);
         }
         y += h;
         ly += h;
         if (ly >= fullH)
             ly -= fullH;
     }
+    g_ps1ProfLayer[2] = g_ps1ProfLayer[2] + tTiles;
+    uint32_t t2       = PS1Hblanks();
     for (int i = 0; i < stripBands;) { // strip bands grouped by region and piece (one texpage each)
         int region = s_stripBands[i].region, j = i;
         while (j < stripBands && s_stripBands[j].region == region) ++j;
@@ -899,6 +931,8 @@ void DrawHLineScrollLayer(int layerID)
         g_ps1LayerPrims = g_ps1LayerPrims + prims;
         i               = j;
     }
+    g_ps1ProfLayer[3] = g_ps1ProfLayer[3] + PS1HblanksSince(t2);
+    (void)t1;
     g_ps1LayerHbl = g_ps1LayerHbl + PS1HblanksSince(t0);
 }
 

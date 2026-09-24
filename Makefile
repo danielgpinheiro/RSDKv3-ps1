@@ -95,6 +95,8 @@ RSDKv3/Math.o RSDKv3/Math.dep: build/gen/trig_tables.inc
 
 # The FMV Huffman (VLC) decoder is the hot loop of video playback: optimise it for speed.
 ps1/mdec.o: CPPFLAGS += -O2
+# Renderer hot paths (tile bands, chain appends): speed over size (docs/28 3.6).
+ps1/render.o ps1/gpu_chain.o: CPPFLAGS += -O2
 
 # Cancel make's built-in `%: %.o` link rule: the extensionless libc shim headers
 # (ps1/libc/string, vector, ...) listed in .dep files must not be rebuilt from `string.o`.
