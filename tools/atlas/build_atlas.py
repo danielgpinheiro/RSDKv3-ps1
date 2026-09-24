@@ -26,7 +26,8 @@ Output: <Data>/Sprites/Atlas/<Stage>.atl (little-endian):
   block  : u16 x, y, w, h (VRAM halfwords), u32 offset of w*h u16 at dataOffset + offset
 Every frame is decoded back from the atlas and compared with its GIF (must be exact).
 
-Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report]
+Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report] [--suffix S]
+  --suffix S: write <Stage>S.atl (per-player atlases: '' = Sonic, '_t' = Tails; manifests per player)
   --cols N: test budget; --report: feasibility only (pack + self-check, no files written; stages
   that don't fit report their texel needs and how many 4-bit columns they are short)
 """
@@ -327,6 +328,7 @@ def main():
     only = args[args.index('--stage') + 1] if '--stage' in args else None
     cols = int(args[args.index('--cols') + 1]) if '--cols' in args else None
     feas = '--report' in args
+    suffix = args[args.index('--suffix') + 1] if '--suffix' in args else ''
     outdir = os.path.join(data, 'Sprites', 'Atlas')
     if not feas:
         os.makedirs(outdir, exist_ok=True)
@@ -348,7 +350,7 @@ def main():
             short.append(name)
             report += ' | DOES NOT FIT: %d page-columns over (64 hw x 256), %d CLUTs over' % (over, over_cluts)
         if not feas and cols is None:
-            open(os.path.join(outdir, name + '.atl'), 'wb').write(blob)
+            open(os.path.join(outdir, name + suffix + '.atl'), 'wb').write(blob)
         print(report)
     if feas:
         print('stages that do not fit the VRAM sprite area: %d %s' % (len(short), ' '.join(short)))

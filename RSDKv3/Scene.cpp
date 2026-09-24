@@ -621,7 +621,7 @@ void LoadStageFiles(void)
             static uint8_t pal[768];
             if (PS1TileSetLoad(stageList[activeStageList][stageListPosition].folder, pal))
                 for (int c = 0x80; c < 0x100; ++c) SetPaletteEntry(-1, c, pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]);
-            PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder);
+            PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder, playerListPos);
         }
 #else
         FileInfo info;

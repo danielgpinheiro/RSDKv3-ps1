@@ -44,10 +44,11 @@ static void clearTables() {
     g_ps1AtlasFmvX = g_ps1AtlasFmvY = 0xFFFF;
 }
 
-bool PS1AtlasLoad(const char *folder) {
+bool PS1AtlasLoad(const char *folder, int player) {
     clearTables();
     char path[96];
-    snprintf(path, sizeof(path), "Data/Sprites/Atlas/%s.atl", folder);
+    // Per-player atlases (docs/28 3.2): <Stage>.atl = Sonic, <Stage>_t.atl = Tails.
+    snprintf(path, sizeof(path), "Data/Sprites/Atlas/%s%s.atl", folder, player == 1 ? "_t" : "");
     FILE *f = fopen(path, "rb");
     if (!f) {
         ramsyscall_printf("[atlas] missing %s: no sprites in this stage\n", path);

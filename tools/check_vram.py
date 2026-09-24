@@ -5,7 +5,7 @@
   atlas      : every block of Data/Sprites/Atlas/<Stage>.atl vs its VRAM rectangle
   palette    : optional PALETTE.bin (GDB dump of activePalette32, 256 x {r,g,b}) entries 0x80-0xFF vs
                the tile GIF's colour table (the .vram header)
-Usage: check_vram.py VRAM.bin DATA_DIR STAGE [PALETTE.bin]
+Usage: check_vram.py VRAM.bin DATA_DIR STAGE [PALETTE.bin]   (STAGE may carry the atlas suffix: R11A_t)
 """
 import struct, sys
 import numpy as np
@@ -15,6 +15,8 @@ def main():
     vram_path, data, stage = sys.argv[1:4]
     vram = np.frombuffer(open(vram_path, 'rb').read(), '<u2').reshape(512, 1024)
     ok = True
+    atlas = stage
+    stage = stage[:-2] if stage.endswith('_t') else stage
     t = open('%s/Stages/%s/16x16Tiles.vram' % (data, stage), 'rb').read()
     pal = t[4:4 + 768]
     pages = np.frombuffer(t[4 + 768:], '<u2').reshape(4, 256, 128)
@@ -23,7 +25,7 @@ def main():
         same = np.array_equal(vram[y:y + 256, x:x + 128], pages[p])
         ok &= same
         print('tile page %d at (%d,%d): %s' % (p, x, y, 'identical' if same else 'DIFFERENT'))
-    a = open('%s/Sprites/Atlas/%s.atl' % (data, stage), 'rb').read()
+    a = open('%s/Sprites/Atlas/%s.atl' % (data, atlas), 'rb').read()
     sheets, clusters, cluts, blocks, fx, fy, off = struct.unpack_from('<6HI', a, 4)
     p = 20 + sheets * 56 + clusters * 16 + cluts * 20
     bad = 0

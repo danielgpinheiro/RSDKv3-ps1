@@ -52,17 +52,24 @@ def main():
 
     cxx = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('g++') or 'c++'
     run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + cxx])
-    # Player list position 0 = Sonic (the act's placed Player Object loads Sonic.Ani; Tails: see docs/28)
-    run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, manifest, '0'], stdout=subprocess.DEVNULL)
-
-    r = run('3 atlas', [PY, os.path.join(HERE, 'atlas', 'build_atlas.py'), data, manifest],
-            check=False, capture_output=True, text=True)
-    errors = [l for l in r.stdout.splitlines() if l.startswith('ERROR')]
-    unexpected = [l for l in errors if l.split()[1].rstrip(':') not in ATLAS_KNOWN_OVER]  # 'ERROR <stage>: ...'
-    atl = len([f for f in os.listdir(os.path.join(data, 'Sprites', 'Atlas')) if f.endswith('.atl')])
-    print('[3 atlas] %d .atl written; known over budget: %s' % (atl, ', '.join(sorted(ATLAS_KNOWN_OVER))))
-    if unexpected or (r.returncode and not errors):
-        sys.exit('atlas failed:\n' + '\n'.join(unexpected or [r.stdout[-2000:], r.stderr[-2000:]]))
+    # One manifest + atlas set per selectable player (docs/28 3.2: Sonic and Tails don't fit one atlas):
+    # player list position 0 = Sonic -> <Stage>.atl, 1 = Tails -> <Stage>_t.atl (the act's placed
+    # Player Object loads the player's .ani; ps1/sprite_atlas picks the file by playerListPos).
+    for player, suffix in ((0, ''), (1, '_t')):
+        mdir = manifest + suffix
+        if os.path.exists(mdir):
+            shutil.rmtree(mdir)
+        run('2 manifest', [os.path.join(HERE, 'rsdkmanifest', 'rsdkmanifest'), iso, mdir, str(player)], stdout=subprocess.DEVNULL)
+        r = run('3 atlas', [PY, os.path.join(HERE, 'atlas', 'build_atlas.py'), data, mdir, '--suffix', suffix],
+                check=False, capture_output=True, text=True)
+        errors = [l for l in r.stdout.splitlines() if l.startswith('ERROR')]
+        unexpected = [l for l in errors if l.split()[1].rstrip(':') not in ATLAS_KNOWN_OVER]  # 'ERROR <stage>: ...'
+        atl = len([f for f in os.listdir(os.path.join(data, 'Sprites', 'Atlas')) if f.endswith(suffix + '.atl')
+                   and (suffix or not f.endswith('_t.atl'))])
+        print('[3 atlas] player %d: %d %s.atl written; known over budget: %s' % (player, atl, '<Stage>' + suffix,
+                                                                           ', '.join(sorted(ATLAS_KNOWN_OVER))))
+        if unexpected or (r.returncode and not errors):
+            sys.exit('atlas failed:\n' + '\n'.join(unexpected or [r.stdout[-2000:], r.stderr[-2000:]]))
 
     run('4 tiles', [PY, os.path.join(HERE, 'tiles', 'convert_tiles.py'), data])
     print('assets ready in %s' % data)

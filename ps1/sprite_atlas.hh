@@ -38,9 +38,9 @@ extern PS1AtlasClut    g_ps1AtlasCluts[PS1_ATLAS_MAX_CLUTS];
 extern int             g_ps1AtlasSheetCount, g_ps1AtlasClusterCount, g_ps1AtlasClutCount;
 extern uint16_t        g_ps1AtlasFmvX, g_ps1AtlasFmvY; // 15-bit video page, 0xFFFF = none
 
-// Loads Data/Sprites/Atlas/<folder>.atl: tables into RAM, pixel blocks into VRAM
-// (immediate uploads: call outside the chain, e.g. during a stage load).
-bool PS1AtlasLoad(const char *folder);
+// Loads Data/Sprites/Atlas/<folder>.atl (player 1 = Tails: <folder>_t.atl): tables into RAM, pixel
+// blocks into VRAM (immediate uploads: call outside the chain, e.g. during a stage load).
+bool PS1AtlasLoad(const char *folder, int player);
 // Sheet index for a sheet path ("Data/Sprites/X/Y.gif" or "X/Y.gif", any case), -1 = none.
 int PS1AtlasFindSheet(const char *path);
 

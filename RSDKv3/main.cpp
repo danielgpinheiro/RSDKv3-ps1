@@ -85,6 +85,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         // Title / Stage Select 0, Menu 0 or 1, Time Attack 2). A `BOOT=` stage starts like the
         // Stage Select does (BOOT_GAMEMODE, default 0).
         SetGlobalVariableByName("Options.GameMode", PS1_BOOT_GAMEMODE);
+        playerListPos = PS1_BOOT_PLAYER; // 0 Sonic, 1 Tails (the menu sets it; per-player atlas, docs/28 3.2)
 #endif
         PS1LoadingEnd();
         g_ps1InitDone = 1;

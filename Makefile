@@ -57,9 +57,10 @@ CPPFLAGS = -I ps1/libc -I RSDKv3 -DRETRO_USE_MOD_LOADER=0
 
 # `make BOOT=<stage folder>` (e.g. R11A): start in that stage (test harness), scene id 1 unless
 # BOOT_ID is given, started like the Stage Select does (Options.GameMode = BOOT_GAMEMODE, default
-# 0; the Menu sets 1, Time Attack 2). Rebuild RSDKv3/main.cpp when switching (touch it).
+# 0; the Menu sets 1, Time Attack 2) with player BOOT_PLAYER (0 Sonic, 1 Tails). Rebuild
+# RSDKv3/main.cpp when switching (touch it).
 ifneq ($(BOOT),)
-CPPFLAGS += -DPS1_BOOT_FOLDER='"$(BOOT)"' -DPS1_BOOT_ID='"$(or $(BOOT_ID),1)"' -DPS1_BOOT_GAMEMODE=$(or $(BOOT_GAMEMODE),0)
+CPPFLAGS += -DPS1_BOOT_FOLDER='"$(BOOT)"' -DPS1_BOOT_ID='"$(or $(BOOT_ID),1)"' -DPS1_BOOT_GAMEMODE=$(or $(BOOT_GAMEMODE),0) -DPS1_BOOT_PLAYER=$(or $(BOOT_PLAYER),0)
 endif
 
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
