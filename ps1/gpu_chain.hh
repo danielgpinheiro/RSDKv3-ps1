@@ -69,6 +69,8 @@ void PS1ChainDrawArea(int x0, int y0, int x1, int y1);
 // drawing area), or copied from the last finished frame (the displayed buffer).
 void PS1ChainFillLines(int y0, int y1, uint8_t r, uint8_t g, uint8_t b);
 void PS1ChainCopyLastFrameLines(int y0, int y1);
+// GP0(80h) VRAM-to-VRAM copy (halfwords), chained; flush the texture cache before sampling it.
+void PS1ChainVramCopy(int sx, int sy, int dx, int dy, int w, int h);
 void PS1ChainDrawAreaReset();
 void PS1ChainMaskControl(bool forceSet, bool test);
 // One-shot hook, run before the next primitive/upload is chained (or by PS1ChainRunHook()).

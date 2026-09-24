@@ -213,3 +213,6 @@ uint32_t PS1HblanksSince(uint32_t) { return 0; }
 
 // Renderer hook (ps1/render.cpp): a script changed a chunk tile.
 void PS1TileChanged(int) {}
+
+// Renderer hook (ps1/render.cpp): upstream Copy16x16Tile on PS1 copies tile pixels in VRAM.
+void PS1Copy16x16Tile(int, int) {}

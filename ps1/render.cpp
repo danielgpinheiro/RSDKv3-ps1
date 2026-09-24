@@ -633,6 +633,53 @@ void PS1TileChanged(int chunkTile)
     PS1UpdateChunkRows(chunkTile >> 6);
 }
 
+// upstream Copy16x16Tile (Scene.hpp, SW path): tile `src`'s pixels overwrite tile `dest`'s, from now
+// on. Here: a VRAM-to-VRAM copy inside the tile pages, chained where the script calls it (draws before
+// it still show the old pixels, as on PC), or immediate outside a frame.
+volatile uint32_t g_ps1TileCopies  = 0; // Copy16x16Tile calls
+volatile uint32_t g_ps1TileRebuild = 0; // copies that made an empty tile visible (packed table rebuilt)
+static void PS1TileVramXY(int t, int &x, int &y)
+{
+    int p = (t >> 8) & 3, n = t & 0xFF;
+    x     = (PS1_TILE_PAGE_X + 2 * (p & 1)) * 64 + (n & 15) * 8;
+    y     = (PS1_TILE_PAGE_Y + (p >> 1)) * 256 + (n >> 4) * 16;
+}
+
+void PS1Copy16x16Tile(int dest, int src)
+{
+    if ((uint)dest >= 1024 || (uint)src >= 1024)
+        return;
+    int sx, sy, dx, dy;
+    PS1TileVramXY(src, sx, sy);
+    PS1TileVramXY(dest, dx, dy);
+    if (s_chainOpen) {
+        PS1ChainVramCopy(sx, sy, dx, dy, 8, 16);
+        PS1ChainFlushCache();
+    }
+    else if (g_ps1GPU) {
+        struct {
+            uint32_t command = 0x80000000;
+            psyqo::Vertex src, dst, size;
+        } c;
+        c.src  = psyqo::Vertex{ { .x = (int16_t)sx, .y = (int16_t)sy } };
+        c.dst  = psyqo::Vertex{ { .x = (int16_t)dx, .y = (int16_t)dy } };
+        c.size = psyqo::Vertex{ { .w = 8, .h = 16 } };
+        PS1GpuImmediate();
+        g_ps1GPU->sendPrimitive(c);
+    }
+    g_ps1TileCopies = g_ps1TileCopies + 1;
+    bool wasSolid   = (g_ps1TileSolid[dest >> 3] >> (dest & 7)) & 1;
+    bool solid      = (g_ps1TileSolid[src >> 3] >> (src & 7)) & 1;
+    if (solid)
+        g_ps1TileSolid[dest >> 3] |= (uint8_t)(1 << (dest & 7));
+    else
+        g_ps1TileSolid[dest >> 3] &= (uint8_t)~(1 << (dest & 7));
+    if (solid && !wasSolid) { // chunk tiles showing `dest` were skipped as empty
+        PS1BuildTileVisuals();
+        g_ps1TileRebuild = g_ps1TileRebuild + 1;
+    }
+}
+
 static psyqo::PrimPieces::TPageAttr s_tileTPage[4];
 static uint32_t s_tileClutWord = 0;
 

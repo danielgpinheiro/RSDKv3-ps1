@@ -431,6 +431,14 @@ void PS1ChainFillLines(int y0, int y1, uint8_t r, uint8_t g, uint8_t b) {
     chainSimple(f);
 }
 
+void PS1ChainVramCopy(int sx, int sy, int dx, int dy, int w, int h) {
+    VRAMCopy c;
+    c.src  = psyqo::Vertex{{.x = (int16_t)sx, .y = (int16_t)sy}};
+    c.dst  = psyqo::Vertex{{.x = (int16_t)dx, .y = (int16_t)dy}};
+    c.size = psyqo::Vertex{{.w = (int16_t)w, .h = (int16_t)h}};
+    chainSimple(c);
+}
+
 void PS1ChainCopyLastFrameLines(int y0, int y1) {
     int16_t by = chainBufferY();
     VRAMCopy c;

@@ -268,7 +268,8 @@ inline void Init3DFloorBuffer(int layerID)
 inline void Copy16x16Tile(ushort dest, ushort src)
 {
 #if RETRO_PLATFORM == RETRO_PS1
-    // PS1: tiles are in VRAM; the phase 3 renderer implements this as a tile remap / VRAM copy.
+    void PS1Copy16x16Tile(int dest, int src); // ps1/render.cpp: VRAM-to-VRAM copy in the tile pages
+    PS1Copy16x16Tile(dest, src);
     return;
 #endif
 #if RETRO_PLATFORM != RETRO_PS1
