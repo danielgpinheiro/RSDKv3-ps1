@@ -1570,8 +1570,73 @@ void DrawObjectAnimation(void *objScr, void *ent, int XPos, int YPos)
     }
 }
 
-// 3D faces (Sonic CD's title, special stages): step 3.3 / phase 7. Menu text: phase 4.
-void DrawFace(void *v, uint colour) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
-void DrawTexturedFace(void *v, byte sheetID) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
+// Scene3D faces (upstream Draw3DScene: title, menu, special stages), already projected to screen
+// by the engine. Vertex order = upstream's HW quads (top-left, top-right, bottom-left, bottom-right) =
+// the PS1 quad order. Phase 7 moves the transform to the GTE.
+volatile uint32_t g_ps1Faces        = 0; // faces chained (flat + textured), total
+volatile uint32_t g_ps1FaceTexMiss  = 0; // textured faces whose UVs span no single atlas cluster (skipped)
+
+void DrawFace(void *v, uint colour)
+{
+    if (!s_frameOpen || PS1ObjectsHidden())
+        return;
+    const Vertex *q = (const Vertex *)v;
+    int alpha       = (int)((colour & 0x7F000000) >> 23); // upstream: 0-254, 0xFE = opaque
+    int level       = alpha >= 0xFE ? 3 : PS1AlphaLevel(alpha);
+    if (!level)
+        return;
+    uint32_t w[5];
+    w[0] = 0x28000000 | (colour & 0xFF) << 16 | (colour & 0xFF00) | ((colour >> 16) & 0xFF); // GP0 28h flat quad, BGR
+    for (int k = 0; k < 4; ++k) w[1 + k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
+    if (level < 3) { // semi-transparent: B/2 + F/2 (the texpage's mode), twice for 75 %
+        psyqo::PrimPieces::TPageAttr attr;
+        attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
+        PS1ChainTPage(attr);
+        w[0] |= 0x02000000;
+    }
+    for (int i = 0; i < (level == 2 ? 2 : 1); ++i) PS1ChainPrimsRawN(w, 5, 1);
+    g_ps1Faces = g_ps1Faces + 1;
+}
+
+void DrawTexturedFace(void *v, byte sheetID)
+{
+    if (!s_frameOpen || PS1ObjectsHidden())
+        return;
+    const Vertex *q = (const Vertex *)v;
+    int sheet       = PS1SurfaceSheet(sheetID);
+    if (sheet < 0) {
+        g_ps1SheetUnbound = g_ps1SheetUnbound + 1;
+        return;
+    }
+    int u0 = q[0].u, v0 = q[0].v, u1 = u0, v1 = v0;
+    for (int k = 1; k < 4; ++k) {
+        u0 = q[k].u < u0 ? q[k].u : u0, u1 = q[k].u > u1 ? q[k].u : u1;
+        v0 = q[k].v < v0 ? q[k].v : v0, v1 = q[k].v > v1 ? q[k].v : v1;
+    }
+    const PS1AtlasCluster *c = PS1FindCluster(sheet, u0, v0);
+    // UV edges may reach the cluster's far edge (u1 == srcX + w): texel u1 itself is never sampled.
+    if (!c || u1 > c->srcX + c->w || v1 > c->srcY + c->h) {
+        g_ps1FaceTexMiss = g_ps1FaceTexMiss + 1;
+        return;
+    }
+    psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
+    uint16_t tpage, clut;
+    memcpy(&tpage, &tp, 2);
+    psyqo::PrimPieces::ClutIndex ci = PS1ClusterClut(c);
+    memcpy(&clut, &ci, 2);
+    auto uv = [&](int k) {
+        int u = c->u + q[k].u - c->srcX, vv = c->v + q[k].v - c->srcY;
+        return (uint32_t)(uint8_t)(u > 255 ? 255 : u) | ((uint32_t)(uint8_t)(vv > 255 ? 255 : vv) << 8);
+    };
+    uint32_t w[9];
+    w[0] = 0x2C808080; // GP0 2Ch textured quad, colour 0x80 (texels unchanged)
+    for (int k = 0; k < 4; ++k) w[1 + 2 * k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
+    w[2] = uv(0) | ((uint32_t)clut << 16);
+    w[4] = uv(1) | ((uint32_t)tpage << 16);
+    w[6] = uv(2);
+    w[8] = uv(3);
+    PS1ChainPrimsRawN(w, 9, 1);
+    g_ps1Faces = g_ps1Faces + 1;
+}
 void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int rowStart, int rowCount) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
 void DrawTextMenu(void *menu, int XPos, int YPos) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }

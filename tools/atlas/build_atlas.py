@@ -80,13 +80,26 @@ def manifest_frames(data, path, images):
         return None if im is None else im.shape  # (H, W)
 
     objsheets = {}  # this stage block: object name -> sheets its subs may load (tools/atlas/object_sheets)
+    whole3d = set()  # sheets sampled by Draw3DScene faces (lower-case paths)
     for line in open(path):
         t = line.split()
         if t[0] == 'stage':
             sheets = {}
-            objsheets = {k.replace(' ', '').lower(): v for k, v in object_sheets(data, int(t[1]), int(t[2]), t[3]).items()}
+            objsheets = {}
+            for k, v in object_sheets(data, int(t[1]), int(t[2]), t[3]).items():
+                if isinstance(k, tuple):  # (name, '3d'): Draw3DScene faces sample these sheets whole
+                    for p in v:
+                        whole3d.add(p.lower())
+                else:
+                    objsheets[k.replace(' ', '').lower()] = v
         elif t[0] == 'sheet':
             sheets[int(t[1])] = t[2]
+            # A 3D object's texture-sized sheet (<= 256x256, e.g. the title's clouds): all of it. Big sheets
+            # (the menu's) rely on their frames; faces outside the atlas are counted at runtime
+            # (g_ps1FaceTexMiss).
+            if t[2].lower() in whole3d and size(t[2]) is not None and size(t[2])[0] * size(t[2])[1] <= 256 * 256:
+                H, W = size(t[2])
+                frames.setdefault(t[2], set()).add((0, 0, W, H))
         elif t[0] == 'frame':
             sid, x, y, w, h = map(int, t[1:6])
             sids = [sid]

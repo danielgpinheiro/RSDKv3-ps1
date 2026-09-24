@@ -8,6 +8,8 @@ every object's subs in the stage's bytecode (GS000 + the list position's file, a
 them; CallFunction followed into script functions) and collects LoadSpriteSheet's string arguments.
 
 object_sheets(data, list, pos, folder) -> {object name: set of sheet paths under Data/Sprites/}
+Objects that call Draw3DScene are also reported under the key (name, '3d'): their faces sample the
+sheet by vertex UVs set at runtime (no sprite frames), so the atlas must hold those sheets whole.
 """
 import os, struct, sys
 
@@ -68,8 +70,9 @@ def _functions(path):
     return list(struct.unpack_from('<%di' % fn, d, p))
 
 
-def _walk(code, start, funcs, fptrs, seen):
-    """LoadSpriteSheet strings reachable from `start` (until End), following CallFunction consts."""
+def _walk(code, start, funcs, fptrs, seen, flags=None):
+    """LoadSpriteSheet strings reachable from `start` (until End), following CallFunction consts.
+    flags (a set) gets '3d' if Draw3DScene is reachable."""
     names, vars_ = _tables()
     out = set()
     p = start
@@ -99,9 +102,11 @@ def _walk(code, start, funcs, fptrs, seen):
                 p += n // 4 + 2
         if name == 'LoadSpriteSheet' and isinstance(ops[0], str):
             out.add(ops[0])
+        elif name == 'Draw3DScene' and flags is not None:
+            flags.add('3d')
         elif name == 'CallFunction' and isinstance(ops[0], int) and 0 <= ops[0] < len(fptrs) and ops[0] not in seen:
             seen.add(ops[0])
-            out |= _walk(code, fptrs[ops[0]], funcs, fptrs, seen)
+            out |= _walk(code, fptrs[ops[0]], funcs, fptrs, seen, flags)
         elif name == 'End':
             break
     return out
@@ -124,16 +129,18 @@ def object_sheets(data, lst, pos, folder):
         objs += list(zip(_global_names(data), bs.subs(gpath)))
     objs += list(zip(stage_names, bs.subs(path)))
     for name, subs in objs:
-        sheets = set()
+        sheets, flags = set(), set()
         for off in subs:
             if 0 <= off < len(code) and off != 0x3FFFF:
-                sheets |= _walk(code, off, None, fptrs, set())
+                sheets |= _walk(code, off, None, fptrs, set(), flags)
         if sheets:
             result.setdefault(name, set()).update(sheets)
+            if '3d' in flags:
+                result.setdefault((name, '3d'), set()).update(sheets)
     return result
 
 
 if __name__ == '__main__':
     d, lst, pos, folder = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
-    for k, v in sorted(object_sheets(d, lst, pos, folder).items()):
+    for k, v in sorted(object_sheets(d, lst, pos, folder).items(), key=str):
         print('%-24s %s' % (k, ' '.join(sorted(v))))
