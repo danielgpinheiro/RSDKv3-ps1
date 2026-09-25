@@ -11,4 +11,5 @@ if [ -n "${DATA:-}" ]; then
 else
   /usr/bin/python3 tools/build_assets.py --rsdk "${RSDK:-../SonicCD_Extracted/Data.rsdk}" --lang "${LANG_DISC:-en}"
 fi
+/usr/bin/python3 tools/disc/gen_load_order.py build/iso/Data  # disc layout in load order (docs/28 phase 9)
 make -s disc
