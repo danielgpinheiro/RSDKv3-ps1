@@ -34,7 +34,11 @@ typedef struct { int unused; } OggVorbis_File;
 #endif
 
 #define TRACK_COUNT   (0x10)
+#if RETRO_PLATFORM == RETRO_PS1
+#define SFX_COUNT (0x50) // Sonic CD loads at most 70 (Secrets: 28 global + 42 stage); LoadSfx skips ids past it
+#else
 #define SFX_COUNT     (0x100)
+#endif
 #define CHANNEL_COUNT (0x4)
 #define SFXDATA_COUNT (0x400000)
 
@@ -70,6 +74,10 @@ struct SFXInfo {
     Sint16 *buffer;
     size_t length;
     bool loaded;
+#if RETRO_PLATFORM == RETRO_PS1
+    uint32_t spuAddr; // SPU-ADPCM sample in SPU RAM (build-time .vag, tools/audio/build_sfx.py)
+    uint32_t rate;
+#endif
 };
 
 struct ChannelInfo {
@@ -153,7 +161,17 @@ inline void ProcessMusicStream() {}
 inline void ProcessAudioPlayback() {}
 inline void ProcessAudioMixing() {}
 
+#if RETRO_PLATFORM == RETRO_PS1
+void PS1MusicStop(); // stops the CD-XA track (ps1/xa_music)
+void PS1MusicPause(bool pause);
+inline void FreeMusInfo()
+{
+    streamInfo[currentStreamIndex].loaded = false;
+    PS1MusicStop();
+}
+#else
 inline void FreeMusInfo() { ov_clear(&streamInfo[currentStreamIndex].vorbisFile); }
+#endif
 #endif
 
 #if RETRO_USE_MOD_LOADER
@@ -173,10 +191,22 @@ inline void StopMusic()
 
 void LoadSfx(char *filePath, byte sfxID);
 void PlaySfx(int sfx, bool loop);
+#if RETRO_PLATFORM == RETRO_PS1
+// RSDK sfx channel c plays on an SPU voice (ps1/spu); SPU RAM is a bump allocator: global sfx, then
+// the stage's (released when the stage folder changes).
+void PS1SfxChannelStop(int channel);
+void PS1SfxReleaseStage();
+void PS1SfxReleaseGlobal();
+void PS1AudioUpdate();     // once per frame: frees channels whose sample ended (PC mixer semantics), music volume
+void PS1SpuDebugService(); // GDB: g_ps1SpuDumpAddr/Len -> SPU RAM copied into a heap buffer
+#endif
 inline void StopSfx(int sfx)
 {
     for (int i = 0; i < CHANNEL_COUNT; ++i) {
         if (sfxChannels[i].sfxID == sfx) {
+#if RETRO_PLATFORM == RETRO_PS1
+            PS1SfxChannelStop(i);
+#endif
             MEM_ZERO(sfxChannels[i]);
             sfxChannels[i].sfxID = -1;
         }
@@ -197,6 +227,9 @@ inline bool PauseSound()
 {
     if (musicStatus == MUSIC_PLAYING) {
         musicStatus = MUSIC_PAUSED;
+#if RETRO_PLATFORM == RETRO_PS1
+        PS1MusicPause(true);
+#endif
         return true;
     }
     return false;
@@ -204,13 +237,22 @@ inline bool PauseSound()
 
 inline void ResumeSound()
 {
-    if (musicStatus == MUSIC_PAUSED)
+    if (musicStatus == MUSIC_PAUSED) {
         musicStatus = MUSIC_PLAYING;
+#if RETRO_PLATFORM == RETRO_PS1
+        PS1MusicPause(false);
+#endif
+    }
 }
 
 inline void StopAllSfx()
 {
-    for (int i = 0; i < CHANNEL_COUNT; ++i) sfxChannels[i].sfxID = -1;
+    for (int i = 0; i < CHANNEL_COUNT; ++i) {
+#if RETRO_PLATFORM == RETRO_PS1
+        PS1SfxChannelStop(i);
+#endif
+        sfxChannels[i].sfxID = -1;
+    }
 }
 inline void ReleaseGlobalSfx()
 {
@@ -224,6 +266,9 @@ inline void ReleaseGlobalSfx()
         }
     }
     globalSFXCount = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1SfxReleaseGlobal();
+#endif
 }
 inline void ReleaseStageSfx()
 {
@@ -236,6 +281,9 @@ inline void ReleaseStageSfx()
         }
     }
     stageSFXCount = 0;
+#if RETRO_PLATFORM == RETRO_PS1
+    PS1SfxReleaseStage();
+#endif
 }
 
 inline void ReleaseAudioDevice()

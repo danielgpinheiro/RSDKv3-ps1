@@ -10,6 +10,7 @@ TYPE = ps-exe
 
 SRCS = \
 RSDKv3/Animation.cpp \
+RSDKv3/Audio.cpp \
 RSDKv3/Collision.cpp \
 RSDKv3/Debug.cpp \
 RSDKv3/Ini.cpp \
@@ -45,7 +46,6 @@ ps1/loading.cpp \
 ps1/sprite_atlas.cpp \
 ps1/tileset.cpp \
 ps1/render.cpp \
-ps1/audio.cpp \
 
 ifeq ($(PLATFORM_TEST),1)
 SRCS := ps1/platform_test.cpp $(filter-out RSDKv3/%,$(SRCS))

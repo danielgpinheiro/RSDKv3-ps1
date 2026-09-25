@@ -173,6 +173,14 @@ void SetLeaderboard(int leaderboardID, int result) { }
 void SetLimitedFade(byte paletteID, byte R, byte G, byte B, ushort alpha, int startIndex, int endIndex) { }
 void SetMusicTrack(char *filePath, byte trackID, bool loop, uint loopPoint) { }
 void SetSfxAttributes(int sfx, int loopCount, sbyte pan) { }
+// PS1 audio hooks (Audio.hpp inline helpers call them; RSDKv3/Audio.cpp is not in this host build).
+void PS1MusicStop() { }
+void PS1MusicPause(bool pause) { }
+void PS1SfxChannelStop(int channel) { }
+void PS1SfxReleaseStage() { }
+void PS1SfxReleaseGlobal() { }
+int currentStreamIndex = 0;
+StreamInfo streamInfo[STREAMFILE_COUNT];
 void SetupTextMenu(TextMenu *menu, int rowCount) { }
 void Sort3DDrawList() { }
 void TouchCollision(int left, int top, int right, int bottom) { }

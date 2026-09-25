@@ -7,8 +7,10 @@ Steps (golden rule: nothing is decoded at runtime; every converter checks its ow
   3. atlas    tools/atlas/build_atlas.py -> Data/Sprites/Atlas/<Stage>.atl (per-stage VRAM sprites)
   4. tiles    tools/tiles/convert_tiles.py -> Data/Stages/*/16x16Tiles.vram (VRAM tile pages)
   5. strips   tools/bgstrips/build_bgstrips.py -> Data/Stages/*/BGStrips[_t].bin (BG line strips, per player)
+  6. sfx      tools/audio/build_sfx.py -> Data/SoundFX/**/*.vag (SPU-ADPCM, one rate per file) +
+              Data/Stages/Secrets/SFX/ (its own lower-rate copies), Data/Game/PS1SfxStages.bin
 The PC source files stay in the tree (.gif .wav .ogg); tools/disc/build_disc.py leaves them off the
-disc. Later phases add audio (SPU-ADPCM, CD-XA) and video (STR) steps.
+disc. Later phases add music (CD-XA) and video (STR) steps.
 
 Output: OUT/build/iso/Data/** and OUT/build/manifest/ (OUT = the repo by default, so `make disc`
 works on it). Needs: a C++17 compiler (CXX), Python with Pillow + numpy.
@@ -84,6 +86,8 @@ def main():
     print('[4 lang] Data/Game/PS1Language.bin = %s' % a.lang)
     r = run('5 bgstrips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data], capture_output=True, text=True)
     print('[5 bgstrips] %d files (self-checked), per player' % sum(1 for l in r.stdout.splitlines() if ' regions ' in l and ' regions  0 ' not in l))
+    r = run('6 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), data], capture_output=True, text=True)
+    print('[6 sfx] ' + ' '.join(l for l in r.stdout.splitlines() if l.startswith('sfx ')))
     print('assets ready in %s' % data)
 
 

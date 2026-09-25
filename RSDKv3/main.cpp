@@ -93,6 +93,8 @@ class RSDKv3PS1App final : public psyqo::Application {
 
     void frame() override {
         uint32_t t0 = PS1Hblanks();
+        PS1AudioUpdate();     // frees SFX channels whose sample ended (before the scripts run), music volume
+        PS1SpuDebugService();
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();
