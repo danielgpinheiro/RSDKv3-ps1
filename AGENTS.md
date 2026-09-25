@@ -29,7 +29,10 @@ github.com/danielgpinheiro/RSDKv3-ps1 (**private**; push here).
 make -j8                        # rsdkv3.ps-exe (+ .elf, .map); must fit 2 MB
 tools/smoke_disc.sh             # phase 0 test disc (subset of SonicCD_Extracted) + make disc
 tools/smoke_test.sh [OUT]       # phase 0 smoke test over GDB (files CRC, SPU, icon, pad, fps)
-tools/data_disc.sh              # game disc from ../SonicCD_Extracted/Data (no .gif/.wav/.ogg)
+tools/data_disc.sh              # build_assets (Data.rsdk -> manifests, atlases, tiles, BG strips) + disc
+tools/frame_capture.sh N OUT    # VRAM + framebuffer PNGs at frame N + renderer profile (MASK/FROM/GDBSET)
+tools/vram_test.sh STAGE[_t]    # tile pages, atlas, BG strips, palette in VRAM == the build files
+tools/perf_zones.sh OUT STAGE.. # frame-time survey across stages (worst frame vs 262 hblanks)
 tools/boot_test.sh [OUT F1 F2]  # headless boot: loads (vblanks), perf, profile, heap, guards
 make BOOT=R11A && tools/logic_test.sh   # start in a stage; drive the player via g_ps1PadTestMask
 tools/scene3d/sort3d_check.sh   # host: PS1 3D draw-list sort == upstream order
@@ -50,6 +53,8 @@ PCSX-Redux in the background with a timeout, GDB for evidence (`../docs/21`). St
 | `tools/loading/` | loading icon builder (mode downsample of any GIF) + VRAM pixel checker |
 | `tools/audio/` | SFX → `.vag` (v2 version; reworked for Sonic CD in phase 5), XA helpers |
 | `tools/smoke_*.sh`, `vramshot.py`, `pad.lua` | phase 0 harness, VRAM dumps, pad input via the web server |
+| `tools/build_assets.py`, `tools/tiles/`, `tools/bgstrips/`, `tools/atlas/`, `tools/rsdkmanifest/` | build-time asset pipeline (per-player atlases + strips) |
+| `ps1/render.cpp` | the PS1 renderer (replaces `RSDKv3/Drawing.cpp`; upstream side effects ported explicitly) |
 
 ## Invariants (inherited from the Nexus port — don't break these)
 - **2 MB RAM** (`RAM_SIZE=2M`); track heap high-water incl. load peaks.

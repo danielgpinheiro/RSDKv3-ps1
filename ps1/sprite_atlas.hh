@@ -17,7 +17,8 @@ struct PS1AtlasCluster {
     uint16_t srcX, srcY, w, h;  // rect in the sheet
     uint8_t tpageX, tpageY;     // texture page (pageX in 64-halfword units, pageY 0/1)
     uint8_t depth;              // 4 or 8
-    uint8_t u, v, pad;          // texel position inside the page
+    uint8_t u, v;               // texel position inside the page
+    uint8_t picture;            // 0 = resident, n = on-demand picture n-1 (tpage/u/v: its current slot)
     uint16_t clut;              // CLUT index (4-bit) or 0xFFFF = master CLUT (8-bit)
 };
 struct PS1AtlasClut {
@@ -44,7 +45,19 @@ bool PS1AtlasLoad(const char *folder, int player);
 // Sheet index for a sheet path ("Data/Sprites/X/Y.gif" or "X/Y.gif", any case), -1 = none.
 int PS1AtlasFindSheet(const char *path);
 
+// On-demand pictures (<folder>.pic, tools/atlas/build_atlas.py): frames too big to keep resident
+// (the Secrets gallery) are loaded into one of a few VRAM slots when a draw first needs them.
+// PS1AtlasPictureReady: true if the cluster's texels are in VRAM now; otherwise the picture is
+// queued (drawn from the next frame on) and false returned. PS1AtlasServicePictures: loads the
+// queued pictures (least recently used slot replaced); call at a frame start, before anything is
+// chained (it releases the chain arenas for the CD read, as a stage load).
+bool PS1AtlasPictureReady(const PS1AtlasCluster *c);
+void PS1AtlasServicePictures();
+
 // Verification counters (GDB).
+extern volatile uint32_t g_ps1PictureLoads;     // on-demand pictures loaded
+extern volatile uint32_t g_ps1PicturePending;   // draws skipped while their picture was queued
+extern volatile int32_t  g_ps1PictureSlot[4];   // picture in each slot (-1 = none)
 extern volatile uint32_t g_ps1AtlasLoads;       // atlases loaded
 extern volatile uint32_t g_ps1AtlasBlockBytes;  // bytes uploaded to VRAM by the last load
 extern volatile uint32_t g_ps1AtlasMissing;     // sheet lookups that found nothing

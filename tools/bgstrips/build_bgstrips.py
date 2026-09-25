@@ -137,7 +137,8 @@ def render_line(gfx, tiles, L, plane, ly, period):
 
 
 def free_grid(atl_path):
-    """used[y, x] (halfwords): everything outside the atlas columns, plus the .atl blocks."""
+    """used[y, x] (halfwords): everything outside the atlas columns, plus the .atl blocks and the
+    on-demand picture slots of its .pic (tools/atlas/build_atlas.py)."""
     used = np.ones((512, 1024), np.uint8)
     for c in ATLAS_COLUMNS:
         used[:, c * 64:c * 64 + 64] = 0
@@ -147,6 +148,13 @@ def free_grid(atl_path):
         o = 20 + ns * 56 + nc * 16 + ncl * 20
         for k in range(nb):
             x, y, w, h = struct.unpack_from('<HHHH', d, o + 12 * k)
+            used[y:y + h, x:x + w] = 1
+    pic_path = atl_path[:-4] + '.pic'
+    if os.path.exists(pic_path):
+        d = open(pic_path, 'rb').read()
+        slots, = struct.unpack_from('<H', d, 4)
+        for k in range(slots):
+            x, y, w, h = struct.unpack_from('<HHHH', d, 16 + 12 * k)
             used[y:y + h, x:x + w] = 1
     return used
 

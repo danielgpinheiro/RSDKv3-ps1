@@ -20,9 +20,9 @@ import argparse, os, shutil, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..'))
 PY = sys.executable
-# Stages whose sprites don't fit the VRAM sprite area yet (docs/28 phase 1: the Secrets gallery is
-# 4 page-columns over; handled in phase 4). The build continues without their atlas.
-ATLAS_KNOWN_OVER = {'Secrets'}
+# Stages whose sprites don't fit the VRAM sprite area (the build continues without their atlas). None
+# since phase 4: the Secrets gallery streams its biggest pictures on demand (<Stage>.pic).
+ATLAS_KNOWN_OVER = set()
 LANG_IDS = {'en': 0, 'jp': 5}  # RetroEngine.hpp RetroLanguages
 
 
@@ -72,8 +72,9 @@ def main():
         unexpected = [l for l in errors if l.split()[1].rstrip(':') not in ATLAS_KNOWN_OVER]  # 'ERROR <stage>: ...'
         atl = len([f for f in os.listdir(os.path.join(data, 'Sprites', 'Atlas')) if f.endswith(suffix + '.atl')
                    and (suffix or not f.endswith('_t.atl'))])
-        print('[3 atlas] player %d: %d %s.atl written; known over budget: %s' % (player, atl, '<Stage>' + suffix,
-                                                                           ', '.join(sorted(ATLAS_KNOWN_OVER))))
+        pics = [l.split()[0] for l in r.stdout.splitlines() if 'on-demand pictures' in l]
+        print('[3 atlas] player %d: %d %s.atl written; on-demand pictures: %s; known over budget: %s' % (
+            player, atl, '<Stage>' + suffix, ', '.join(pics) or '-', ', '.join(sorted(ATLAS_KNOWN_OVER)) or '-'))
         if unexpected or (r.returncode and not errors):
             sys.exit('atlas failed:\n' + '\n'.join(unexpected or [r.stdout[-2000:], r.stderr[-2000:]]))
 

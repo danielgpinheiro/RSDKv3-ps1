@@ -36,6 +36,19 @@ def main():
     ok &= bad == 0
     print('atlas: %d blocks, %d different' % (blocks, bad))
     import os
+    pp = '%s/Sprites/Atlas/%s.pic' % (data, atlas)
+    if os.path.exists(pp):  # on-demand pictures: which one each slot holds (whole picture identical)
+        d = open(pp, 'rb').read()
+        nslots, npics, nblk, _, doff = struct.unpack_from('<4HI', d, 4)
+        slots = [struct.unpack_from('<4H2h', d, 16 + 12 * k) for k in range(nslots)]
+        pics = [struct.unpack_from('<2H', d, 16 + 12 * nslots + 4 * i) for i in range(npics)]
+        bo = 16 + 12 * nslots + 4 * npics
+        blks = [struct.unpack_from('<4HI', d, bo + 12 * b) for b in range(nblk)]
+        for k, (sx, sy, sw, sh, dx, dy) in enumerate(slots):
+            held = [i for i, (fb, n) in enumerate(pics) if all(np.array_equal(
+                vram[y + dy * 256:y + dy * 256 + h, x + dx * 64:x + dx * 64 + w],
+                np.frombuffer(d, '<u2', w * h, doff + o).reshape(h, w)) for (x, y, w, h, o) in blks[fb:fb + n])]
+            print('picture slot %d (%d,%d %dx%d): %s' % (k, sx, sy, sw, sh, 'picture %s identical' % held if held else 'no picture'))
     sp = '%s/Stages/%s/BGStrips%s.bin' % (data, stage, '_t' if atlas.endswith('_t') else '')
     if os.path.exists(sp):  # BG line strips (tools/bgstrips): every piece vs its VRAM rectangle
         d = open(sp, 'rb').read()

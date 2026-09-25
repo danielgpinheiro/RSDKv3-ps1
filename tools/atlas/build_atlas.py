@@ -20,11 +20,24 @@ Output: <Data>/Sprites/Atlas/<Stage>.atl (little-endian):
            u16 fmvX, fmvY (0xFFFF = no FMV reservation), u32 dataOffset
   sheet  : char name[48] (path under Data/Sprites/, lower case), u16 firstCluster,
            clusterCount, width, height                                  (56 B)
-  cluster: u16 srcX, srcY, w, h, u8 tpageX, tpageY, depth (4|8), u, v, pad, u16 clut
-           (clut = CLUT index for 4-bit, 0xFFFF = master CLUT)             (16 B)
+  cluster: u16 srcX, srcY, w, h, u8 tpageX, tpageY, depth (4|8), u, v, picture, u16 clut
+           (clut = CLUT index for 4-bit, 0xFFFF = master CLUT; picture 0 = resident, n = on-demand
+           picture n-1 of <Stage>.pic, tpage/u/v as in slot 0)             (16 B)
   clut   : u16 vramX, vramY, u8 map[16] (master palette index per 4-bit value) (20 B)
   block  : u16 x, y, w, h (VRAM halfwords), u32 offset of w*h u16 at dataOffset + offset
 Every frame is decoded back from the atlas and compared with its GIF (must be exact).
+
+On-demand pictures (docs/28 phase 4, user decision 2026-09-24): a stage whose frames don't fit (the
+Secrets gallery's full-screen pictures) streams its largest frame groups (merged rects) instead of
+keeping them resident: each is a picture of <Stage>.pic, loaded by ps1/sprite_atlas into one of
+two VRAM slots (same shape, columns SLOTS) when a draw first needs it, least recently used slot
+replaced. The fewest pictures that make the rest fit are chosen, largest first.
+<Data>/Sprites/Atlas/<Stage>.pic (little-endian):
+  header : 'PIC1', u16 slotCount, pictureCount, blockCount, pad, u32 dataOffset       (16 B)
+  slot   : u16 x, y, w, h (VRAM halfword rect), s16 dTpageX, dTpageY (vs slot 0)       (12 B)
+  picture: u16 firstBlock, blockCount                                                  (4 B)
+  block  : u16 x, y, w, h (slot 0 VRAM halfwords), u32 offset at dataOffset + offset   (12 B)
+Each picture's pixel data starts on a sector.
 
 Usage: build_atlas.py DATA_DIR MANIFEST_DIR [--stage NAME] [--cols N] [--report] [--suffix S] [--lang en|jp]
   --suffix S: write <Stage>S.atl (per-player atlases: '' = Sonic, '_t' = Tails; manifests per player)
@@ -45,6 +58,9 @@ COLUMNS = [5, 6, 7, 8, 13, 14, 15]
 PAIRS = [(5, 6), (7, 8), (13, 14)]
 FMV_RESERVED = {(5, 1), (6, 1), (7, 1), (8, 1)}  # (column, pageY) -> 15-bit video page
 FMV_XY = (320, 256)
+# On-demand picture slots: (8-bit pair, lone column, pageY); same shape, so a picture packed for slot 0
+# moves to slot k by a whole-column offset. 320 texels wide (256 in the pair + 64 in the lone column).
+SLOTS = [((13, 14), 15, 1), ((5, 6), 7, 1)]
 # 4-bit CLUT slots (16 halfwords): row 240 right of the master CLUT, rows 241-255 and 496-503
 # (rows 504-511 hold the runtime INK_BLEND CLUTs, Drawing.cpp PS1_BLEND_*)
 CLUT_SLOTS = [(x, 240) for x in range(256, 320, 16)] + \
@@ -218,13 +234,15 @@ class Bin:
         return best
 
 
-def build_stage(data, manifest, name, cols_limit=None, virtual=0):
-    """virtual > 0 (feasibility): that many extra 64-halfword columns beyond real VRAM, per page row."""
+def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
+    """virtual > 0 (feasibility): that many extra 64-halfword columns beyond real VRAM, per page row.
+    stream > 0: the `stream` largest merged rects become on-demand pictures (<Stage>.pic)."""
     images = {}
     frames = manifest_frames(data, manifest, images)
     video = False
     images = {k: v for k, v in images.items() if k in frames}
-    clusters = []  # dict(sheet, rect, depth, colors, clut, tpx, tpy, u, v)
+    clusters = []  # dict(sheet, rect, depth, colors, clut, tpx, tpy, u, v, pic)
+    merged = []    # (area, sheet, rect) of every merged rect: on-demand picture candidates
     for sheet in sorted(frames):
         im = images[sheet]
         H, W = im.shape
@@ -234,10 +252,18 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0):
             if x1 > x0 and y1 > y0:
                 rects.append((x0, y0, x1 - x0, y1 - y0))
         for r in merge(rects):
+            merged.append((r[2] * r[3], sheet, r))
             for piece in split(r):
                 x, y, w, h = piece
                 cols = set(np.unique(im[y:y + h, x:x + w]).tolist()) - {0}
-                clusters.append(dict(sheet=sheet, rect=piece, colors=cols, depth=4 if len(cols) <= 15 else 8))
+                clusters.append(dict(sheet=sheet, rect=piece, colors=cols, depth=4 if len(cols) <= 15 else 8,
+                                     group=(sheet, r), pic=None))
+    pictures = [(sh, r) for _, sh, r in sorted(merged, key=lambda m: (-m[0], m[1], m[2]))[:stream]]
+    for c in clusters:
+        if c['group'] in pictures:
+            c['pic'] = pictures.index(c['group'])
+    if pictures and video:
+        raise AtlasError('%s: on-demand pictures and the FMV page both want columns 5-7' % name)
 
     # CLUT groups for 4-bit clusters (greedy: biggest colour sets first, least growth).
     groups = []
@@ -258,56 +284,75 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0):
         raise AtlasError('%s: %d CLUTs > %d slots' % (name, len(groups), len(CLUT_SLOTS)))
     clut_maps = [[0] + sorted(g) + [0] * (15 - len(g)) for g in groups]
 
-    # Columns available (column, pageY); FMV page reserved when the stage plays a video.
+    # Columns available (column, pageY); FMV page reserved when the stage plays a video; the picture
+    # slots when the stage streams pictures.
     vcols = [100 + i for i in range(virtual)]
     pairs = PAIRS + [(vcols[i], vcols[i + 1]) for i in range(0, len(vcols) - 1, 2)]
     free = [(c, py) for py in (0, 1) for c in COLUMNS + vcols]
     if video:
         free = [cp for cp in free if cp not in FMV_RESERVED]
+    if pictures:
+        slot_cols = {(c, py) for (a, b), lone, py in SLOTS for c in (a, b, lone)}
+        free = [cp for cp in free if cp not in slot_cols]
     if cols_limit is not None:
         free = free[:cols_limit]
-    bins = []
 
-    def new_bin(depth):
-        if depth == 8:
-            for a, b in pairs:
-                for py in (0, 1):
-                    if (a, py) in free and (b, py) in free:
-                        free.remove((a, py)); free.remove((b, py))
-                        return Bin(a, py, 8, PAGE, [(a, py), (b, py)])
-            for cp in list(free):  # a lone column: an 8-bit page with u < 128
-                free.remove(cp)
-                return Bin(cp[0], cp[1], 8, 128, [cp])
+    def pack(todo_clusters, free, pairs, what):
+        bins = []
+
+        def new_bin(depth):
+            if depth == 8:
+                for a, b in pairs:
+                    for py in (0, 1):
+                        if (a, py) in free and (b, py) in free:
+                            free.remove((a, py)); free.remove((b, py))
+                            return Bin(a, py, 8, PAGE, [(a, py), (b, py)])
+                for cp in list(free):  # a lone column: an 8-bit page with u < 128
+                    free.remove(cp)
+                    return Bin(cp[0], cp[1], 8, 128, [cp])
+                return None
+            if free:
+                cp = free.pop(0)
+                return Bin(cp[0], cp[1], 4, PAGE, [cp])
             return None
-        if free:
-            cp = free.pop(0)
-            return Bin(cp[0], cp[1], 4, PAGE, [cp])
-        return None
 
-    for depth in (8, 4):
-        todo = sorted((c for c in clusters if c['depth'] == depth), key=lambda c: (-c['rect'][3], -c['rect'][2]))
-        for c in todo:
-            w, h = c['rect'][2], c['rect'][3]
-            spot = None
-            for b in bins:
-                if b.depth == depth and w <= b.width:
-                    spot = b.place(w, h)
-                    if spot:
-                        break
-            if not spot:
-                b = new_bin(depth)
-                while b is not None and w > b.width:  # a half-width 8-bit page can't take it
+        for depth in (8, 4):
+            todo = sorted((c for c in todo_clusters if c['depth'] == depth), key=lambda c: (-c['rect'][3], -c['rect'][2]))
+            for c in todo:
+                w, h = c['rect'][2], c['rect'][3]
+                spot = None
+                for b in bins:
+                    if b.depth == depth and w <= b.width:
+                        spot = b.place(w, h)
+                        if spot:
+                            break
+                if not spot:
                     b = new_bin(depth)
-                if b is None:
-                    raise AtlasError('%s: out of VRAM placing %s %s (%d-bit)' % (name, c['sheet'], c['rect'], depth))
-                bins.append(b)
-                spot = b.place(w, h)
-            c['tpx'], c['tpy'], (c['u'], c['v']) = b.tpx, b.tpy, spot
+                    while b is not None and w > b.width:  # a half-width 8-bit page can't take it
+                        b = new_bin(depth)
+                    if b is None:
+                        raise AtlasError('%s: out of VRAM placing %s %s (%d-bit)%s' % (name, c['sheet'], c['rect'], depth, what))
+                    bins.append(b)
+                    spot = b.place(w, h)
+                c['tpx'], c['tpy'], (c['u'], c['v']) = b.tpx, b.tpy, spot
+        return bins
 
-    # Render the VRAM image of the sprite columns.
-    vram = np.zeros((512, 1024 + 64 * (100 + virtual) if virtual else 1024), np.uint16)
+    bins = pack([c for c in clusters if c['pic'] is None], free, pairs, '')
+    pic_bins = []  # per picture: its bins in slot 0
+    if pictures:
+        (a, b), lone, py = SLOTS[0]
+        for i, (sh, r) in enumerate(pictures):
+            pic_bins.append(pack([c for c in clusters if c['pic'] == i], [(a, py), (b, py), (lone, py)], [(a, b)],
+                                 ' (picture %d %s %s does not fit a slot)' % (i, sh, r)))
+
+    # Render the VRAM image of the sprite columns (resident clusters) and one per picture (slot 0).
+    vram_w = 1024 + 64 * (100 + virtual) if virtual else 1024
+    vram = np.zeros((512, vram_w), np.uint16)
+    pic_vram = [np.zeros((512, vram_w), np.uint16) for _ in pictures]
     used_lines = {}
+    pic_lines = [{} for _ in pictures]
     for c in clusters:
+        img, lines_of = (vram, used_lines) if c['pic'] is None else (pic_vram[c['pic']], pic_lines[c['pic']])
         x, y, w, h = c['rect']
         idx = images[c['sheet']][y:y + h, x:x + w].astype(np.uint16)
         X0, Y0 = c['tpx'] * 64, c['tpy'] * 256 + c['v']
@@ -324,29 +369,33 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0):
             q = np.pad(q, ((0, 0), (lead, trail)))
             hx = X0 + c['u'] // 4
             words = q[:, 0::4] | (q[:, 1::4] << 4) | (q[:, 2::4] << 8) | (q[:, 3::4] << 12)
-        region = vram[Y0:Y0 + h, hx:hx + words.shape[1]]
+        region = img[Y0:Y0 + h, hx:hx + words.shape[1]]
         region |= words  # padding texels are 0, neighbours never overlap real texels
         key = (c['tpx'], c['tpy'])
-        used_lines[key] = max(used_lines.get(key, 0), c['v'] + h)
+        lines_of[key] = max(lines_of.get(key, 0), c['v'] + h)
 
-    blocks = []
-    for b in bins:
-        lines = used_lines.get((b.tpx, b.tpy), 0)
-        if lines:
-            w = 64 * len(b.cols)
-            blocks.append((b.tpx * 64, b.tpy * 256, w, lines))
+    def bin_blocks(bins, lines_of):
+        out = []
+        for b in bins:
+            lines = lines_of.get((b.tpx, b.tpy), 0)
+            if lines:
+                out.append((b.tpx * 64, b.tpy * 256, 64 * len(b.cols), lines))
+        return out
+    blocks = bin_blocks(bins, used_lines)
+    pic_blocks = [bin_blocks(pb, pl) for pb, pl in zip(pic_bins, pic_lines)]
 
     # Self-check: decode every cluster from the VRAM image + CLUT maps into a reconstructed
     # sheet, then every frame region must equal the GIF (and be fully covered).
     recon = {sh: np.full(im.shape, -1, np.int32) for sh, im in images.items()}
     for c in clusters:
+        vram_c = vram if c['pic'] is None else pic_vram[c['pic']]
         x, y, w, h = c['rect']
         X0, Y0 = c['tpx'] * 64, c['tpy'] * 256 + c['v']
         if c['depth'] == 8:
-            words = vram[Y0:Y0 + h, X0 + c['u'] // 2:X0 + (c['u'] + w + 1) // 2 + 1].astype(np.int32)
+            words = vram_c[Y0:Y0 + h, X0 + c['u'] // 2:X0 + (c['u'] + w + 1) // 2 + 1].astype(np.int32)
             tex = np.stack([words & 0xFF, words >> 8], -1).reshape(h, -1)[:, c['u'] % 2:c['u'] % 2 + w]
         else:
-            words = vram[Y0:Y0 + h, X0 + c['u'] // 4:X0 + (c['u'] + w + 3) // 4 + 1].astype(np.int32)
+            words = vram_c[Y0:Y0 + h, X0 + c['u'] // 4:X0 + (c['u'] + w + 3) // 4 + 1].astype(np.int32)
             nib = np.stack([(words >> s_) & 0xF for s_ in (0, 4, 8, 12)], -1).reshape(h, -1)[:, c['u'] % 4:c['u'] % 4 + w]
             tex = np.array(clut_maps[c['clut']], np.int32)[nib]
         recon[c['sheet']][y:y + h, x:x + w] = tex
@@ -378,7 +427,8 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0):
         sheet_tab += struct.pack('<48sHHHH', s.lower().encode()[:47], mine[0], len(mine), W, H)
     for c in order:
         x, y, w, h = c['rect']
-        cl_tab += struct.pack('<HHHHBBBBBBH', x, y, w, h, c['tpx'], c['tpy'], c['depth'], c['u'], c['v'], 0,
+        cl_tab += struct.pack('<HHHHBBBBBBH', x, y, w, h, c['tpx'], c['tpy'], c['depth'], c['u'], c['v'],
+                              0 if c['pic'] is None else c['pic'] + 1,
                               c['clut'] if c['depth'] == 4 else 0xFFFF)
     clut_tab = bytearray()
     for i, m in enumerate(clut_maps):
@@ -394,6 +444,29 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0):
     out += sheet_tab + cl_tab + clut_tab + blk_tab
     out += bytes(data_off - len(out)) + pixels
 
+    pic = None
+    if pictures:
+        slot_tab = bytearray()
+        (a0, _), _, py0 = SLOTS[0]
+        for (a, b), lone, py in SLOTS:
+            x0 = min(a, lone) * 64
+            slot_tab += struct.pack('<HHHHhh', x0, py * 256, (max(b, lone) + 1) * 64 - x0, 256, a - a0, py - py0)
+        pic_tab, pblk_tab, ppix = bytearray(), bytearray(), bytearray()
+        nblk = 0
+        for i, pb in enumerate(pic_blocks):
+            pic_tab += struct.pack('<HH', nblk, len(pb))
+            ppix += bytes((-len(ppix)) % 2048)  # each picture on a sector
+            for (x, y, w, h) in pb:
+                pblk_tab += struct.pack('<HHHHI', x, y, w, h, len(ppix))
+                ppix += pic_vram[i][y:y + h, x:x + w].astype('<u2').tobytes()
+                nblk += 1
+        head = 16 + len(slot_tab) + len(pic_tab) + len(pblk_tab)
+        poff = (head + 2047) // 2048 * 2048
+        pic = bytearray(struct.pack('<4sHHHHI', b'PIC1', len(SLOTS), len(pictures), nblk, 0, poff))
+        pic += slot_tab + pic_tab + pblk_tab
+        pic += bytes(poff - len(pic)) + ppix
+        pic = bytes(pic)
+
     n4 = sum(c['rect'][2] * c['rect'][3] for c in clusters if c['depth'] == 4)
     n8 = sum(c['rect'][2] * c['rect'][3] for c in clusters if c['depth'] == 8)
     report = ('%-7s sheets %2d clusters %3d (4-bit %3d / 8-bit %3d) texels 4-bit %6d 8-bit %6d | pages 8-bit %d 4-bit %d '
@@ -402,9 +475,12 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0):
                   sum(c['depth'] == 8 for c in clusters), n4, n8,
                   sum(b.depth == 8 for b in bins), sum(b.depth == 4 for b in bins),
                   sum(w * h for (_, _, w, h) in blocks), len(clut_maps), 'reserved' if video else '-', len(out), checked))
+    if pictures:
+        report += ' | on-demand pictures %d (%s), %d slots, .pic %d B' % (
+            len(pictures), ', '.join('%s %dx%d' % (os.path.basename(sh), r[2], r[3]) for sh, r in pictures), len(SLOTS), len(pic))
     over = sum(1 for b in bins for (c, _) in b.cols if c >= 100)
     over_cluts = max(0, len(clut_maps) - len(CLUT_SLOTS))
-    return bytes(out), report, over, over_cluts
+    return bytes(out), report, over, over_cluts, pic
 
 
 def main():
@@ -429,18 +505,33 @@ def main():
         name = f[:-4]
         if only and name != only:
             continue
+        pic = None
         try:
-            blob, report, _, _ = build_stage(data, os.path.join(mdir, f), name, cols)
+            blob, report, _, _, pic = build_stage(data, os.path.join(mdir, f), name, cols)
         except AtlasError as e:
-            if not feas:
-                print('ERROR', e)
+            # Doesn't fit: stream the fewest largest frame groups as on-demand pictures.
+            err, blob = e, None
+            for k in range(1, 17):
+                try:
+                    blob, report, _, _, pic = build_stage(data, os.path.join(mdir, f), name, cols, stream=k)
+                    break
+                except AtlasError as e2:
+                    err = e2
+            if blob is None and not feas:
+                print('ERROR', e, '| with on-demand pictures:', err)
                 rc = 1
                 continue
-            blob, report, over, over_cluts = build_stage(data, os.path.join(mdir, f), name, None, virtual=32)
-            short.append(name)
-            report += ' | DOES NOT FIT: %d page-columns over (64 hw x 256), %d CLUTs over' % (over, over_cluts)
+            if blob is None:
+                blob, report, over, over_cluts, _ = build_stage(data, os.path.join(mdir, f), name, None, virtual=32)
+                short.append(name)
+                report += ' | DOES NOT FIT: %d page-columns over (64 hw x 256), %d CLUTs over' % (over, over_cluts)
         if not feas and cols is None:
             open(os.path.join(outdir, name + suffix + '.atl'), 'wb').write(blob)
+            ppath = os.path.join(outdir, name + suffix + '.pic')
+            if pic:
+                open(ppath, 'wb').write(pic)
+            elif os.path.exists(ppath):
+                os.remove(ppath)
         print(report)
     if feas:
         print('stages that do not fit the VRAM sprite area: %d %s' % (len(short), ' '.join(short)))
