@@ -9,8 +9,9 @@ Steps (golden rule: nothing is decoded at runtime; every converter checks its ow
   5. strips   tools/bgstrips/build_bgstrips.py -> Data/Stages/*/BGStrips[_t].bin (BG line strips, per player)
   6. sfx      tools/audio/build_sfx.py -> Data/SoundFX/**/*.vag (SPU-ADPCM, one rate per file) +
               Data/Stages/Secrets/SFX/ (its own lower-rate copies), Data/Game/PS1SfxStages.bin
+  7. music    tools/audio/build_music.py -> Data/Music/Music.xa + Music.bin (CD-XA, 68 tracks, 8 channels)
 The PC source files stay in the tree (.gif .wav .ogg); tools/disc/build_disc.py leaves them off the
-disc. Later phases add music (CD-XA) and video (STR) steps.
+disc. Phase 6 adds video (STR).
 
 Output: OUT/build/iso/Data/** and OUT/build/manifest/ (OUT = the repo by default, so `make disc`
 works on it). Needs: a C++17 compiler (CXX), Python with Pillow + numpy.
@@ -88,6 +89,8 @@ def main():
     print('[5 bgstrips] %d files (self-checked), per player' % sum(1 for l in r.stdout.splitlines() if ' regions ' in l and ' regions  0 ' not in l))
     r = run('6 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), data], capture_output=True, text=True)
     print('[6 sfx] ' + ' '.join(l for l in r.stdout.splitlines() if l.startswith('sfx ')))
+    r = run('7 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), data], capture_output=True, text=True)
+    print('[7 music] ' + ' '.join(l for l in r.stdout.splitlines() if l.startswith('Music.xa')))
     print('assets ready in %s' % data)
 
 

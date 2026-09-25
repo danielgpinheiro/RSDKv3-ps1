@@ -1,11 +1,14 @@
 /*
- * CD-XA music (phase 5): plays one channel of Data/Music/Music.xa (tools/audio/build_music.py)
+ * CD-XA music (docs/28 phase 5.2): plays one track of Data/Music/Music.xa (tools/audio/build_music.py)
  * through the CD drive's XA-ADPCM decoder into the SPU's CD input. No CPU decoding, no SPU RAM.
+ * Sonic CD: 68 tracks in 8 channels, back to back per channel; a track starts at its start row, loops
+ * at its loop row (the script's loop point, row-aligned at build time) and ends at its end marker.
  *
  * A long-lived psyqo::CDRomDevice::Action (raw commands, like ps1/cdrom_stream.cpp):
  * Setloc -> Setfilter(1, channel) -> Setmode(2x | XA-ADPCM | 2340-byte sectors | filter) ->
  * ReadS. Audio sectors never reach the CPU; data sectors do (INT1): each is DMA'd into a small
- * buffer, and the channel's end-marker sector either loops the track (Setloc + ReadS) or pauses.
+ * buffer, and the track's end-marker sector (channel + track id) either loops the track
+ * (Setloc to the loop row + ReadS) or pauses.
  * One CD action at a time: stop the music before any file read (cdrom_fs does it as a safety
  * net and counts it).
  */
@@ -14,10 +17,8 @@
 #include <stdint.h>
 
 bool PS1XaInit();                                   // reads Data/Music/Music.bin + finds Music.xa
-int  PS1XaFindTrack(const char *path);              // "Data/Music/Nexus/X.ogg" -> channel, -1 if absent,
-                                                    // PS1_XA_IN_VIDEO: plays inside the FMV stream (the intro)
-#define PS1_XA_IN_VIDEO 0xFF
-void PS1XaPlay(int channel, bool loop);             // (re)start a track from its beginning
+int  PS1XaFindTrack(const char *path);              // "Data/Music/JP/R1A.ogg" -> track, -1 if absent
+void PS1XaPlay(int track, bool loop);               // (re)start a track from its beginning
 void PS1XaStop();                                   // pause the drive and wait until the action ended
 void PS1XaPause();                                  // PauseSound: stop reading, keep the position
 void PS1XaResume();                                 // ResumeSound: ReadS again from the current position
@@ -32,3 +33,4 @@ extern volatile uint32_t g_ps1XaForcedStops; // stopped by a file read (cdrom_fs
 extern volatile uint32_t g_ps1XaLoopFrame;   // g_ps1PerfFrames at the last loop (gap check)
 extern volatile uint32_t g_ps1XaStartFrame;  // g_ps1PerfFrames when the current track started
 extern volatile int32_t g_ps1XaChannel;      // channel of the current track
+extern volatile int32_t g_ps1XaTrack;        // current track (Music.bin index)

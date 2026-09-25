@@ -143,6 +143,11 @@ bool ReadSaveRAMData()
 #endif
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+    // No save files on the disc (the memory card comes in docs/28 phase 8): as a missing file on PC. No CD
+    // access either: the menu reads saves while CD-XA music plays (one CD action at a time).
+    return false;
+#endif
     FileIO *saveFile = fOpen(buffer, "rb");
     if (!saveFile) {
 #if RETRO_USE_MOD_LOADER
@@ -190,6 +195,9 @@ bool ReadSaveRAMData()
 
 bool WriteSaveRAMData()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    return true; // docs/28 phase 8 (memory card); never the CD
+#endif
     char buffer[0x180];
     if (!useSGame) {
 #if RETRO_USE_MOD_LOADER
@@ -880,6 +888,9 @@ void WriteSettings()
 
 void ReadUserdata()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    return; // achievements / leaderboards stay in RAM (docs/28 phase 8); never the CD, which may be streaming music
+#endif
     char buffer[0x200];
 #if RETRO_USE_MOD_LOADER
 #if RETRO_PLATFORM == RETRO_UWP
@@ -938,6 +949,9 @@ void ReadUserdata()
 
 void WriteUserdata()
 {
+#if RETRO_PLATFORM == RETRO_PS1
+    return; // achievements / leaderboards stay in RAM (docs/28 phase 8); never the CD, which may be streaming music
+#endif
     char buffer[0x200];
 #if RETRO_USE_MOD_LOADER
 #if RETRO_PLATFORM == RETRO_UWP

@@ -137,6 +137,7 @@ void PS1SpuDebugService()
     }
 }
 
+volatile uint32_t g_ps1MusicSilentFrames = 0; // frames with musicStatus PLAYING but no XA stream (GDB)
 volatile int32_t g_ps1MusicTestPlay = -1; // GDB test hook: >= 0 -> PlayMusic(n) next frame, like a script
 void PS1AudioUpdate()
 {
@@ -150,6 +151,10 @@ void PS1AudioUpdate()
     // non-looping track that reached its end stops like the PC stream at end of file.
     if (musicStatus == MUSIC_PLAYING && PS1XaEnded())
         musicStatus = MUSIC_STOPPED;
+    // The engine thinks music plays but the drive isn't streaming it (a file read stopped it and no
+    // PlayMusic followed): silence the PC wouldn't have.
+    if (musicStatus == MUSIC_PLAYING && !PS1XaPlaying())
+        g_ps1MusicSilentFrames = g_ps1MusicSilentFrames + 1;
     int cdVol = musicStatus == MUSIC_PLAYING ? 0x7fff * bgmVolume / MAX_VOLUME * masterVolume / MAX_VOLUME : 0;
     PS1SpuSetCdVolume((uint16_t)cdVol, (uint16_t)cdVol);
     // PC frees a channel (StopSfx of its sfx) when its sample runs out; on the SPU the voice's envelope
