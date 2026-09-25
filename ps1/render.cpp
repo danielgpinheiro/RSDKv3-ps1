@@ -117,6 +117,32 @@ static int s_fadeR, s_fadeG, s_fadeB, s_fadeA;
 static psyqo::Prim::FastFill *s_clearPrim = nullptr;
 volatile uint32_t g_ps1ClutFades = 0; // frames whose fade went into the CLUTs (exact)
 
+// Direct-colour primitives of the frame (flat rectangles such as the Title's background, flat 3D faces
+// such as the menu's panels, the ClearScreen rectangle): the CLUT fade doesn't reach them, so FlipScreen
+// applies the same blend to their colour words, still in the chain there (psyqo sends it after flip()).
+struct PS1DirectColour {
+    uint32_t *word;
+    uint8_t r, g, b;
+};
+#define PS1_DIRECT_COLOURS 96
+static PS1DirectColour s_directColours[PS1_DIRECT_COLOURS];
+static int s_directCount = 0;
+volatile uint32_t g_ps1FadeDirect = 0, g_ps1FadeDirectDropped = 0; // colours faded / not recorded (list full)
+
+// One flat primitive (w[0] = GP0 command | BGR) written straight into the chain, its colour recorded.
+static void PS1ChainFlatRaw(const uint32_t *w, int words)
+{
+    uint32_t *d = PS1ChainRawBegin(words);
+    if (!d)
+        return;
+    for (int i = 0; i < words; ++i) d[i] = w[i];
+    PS1ChainRawEnd();
+    if (s_directCount < PS1_DIRECT_COLOURS)
+        s_directColours[s_directCount++] = PS1DirectColour{ d, (uint8_t)(w[0] & 0xFF), (uint8_t)(w[0] >> 8), (uint8_t)(w[0] >> 16) };
+    else
+        g_ps1FadeDirectDropped = g_ps1FadeDirectDropped + 1;
+}
+
 static void PS1BuildPalette(int bank)
 {
     const PaletteEntry *pal = fullPalette32[bank];
@@ -198,6 +224,7 @@ static void PS1FrameStart(bool clear)
     g_ps1TileBandCount  = 0;
     s_fadePending = false;
     s_clearPrim   = nullptr;
+    s_directCount = 0;
     if (clear) {
         s_clearPrim = PS1ChainClear(0, 0, 0);
         g_ps1DrawFrames = g_ps1DrawFrames + 1;
@@ -578,7 +605,7 @@ static void PS1ChainFlatPolygonClipped(const int *px, const int *py, int n, uint
         uint32_t w[4] = { cmd, (uint32_t)(uint16_t)ax[0] | ((uint32_t)(uint16_t)ay[0] << 16),
                           (uint32_t)(uint16_t)ax[i] | ((uint32_t)(uint16_t)ay[i] << 16),
                           (uint32_t)(uint16_t)ax[i + 1] | ((uint32_t)(uint16_t)ay[i + 1] << 16) };
-        for (int r = 0; r < repeat; ++r) PS1ChainPrimsRawN(w, 4, 1);
+        for (int r = 0; r < repeat; ++r) PS1ChainFlatRaw(w, 4);
     }
 }
 
@@ -659,6 +686,15 @@ void FlipScreen()
     if (s_fadePending)
         clear = psyqo::Color{ { .r = (uint8_t)(s_fadeR * s_fadeA / 255), .g = (uint8_t)(s_fadeG * s_fadeA / 255),
                                 .b = (uint8_t)(s_fadeB * s_fadeA / 255) } };
+    if (s_fadePending) { // before the bank regions replay (copy) the frame's fragments
+        int a = s_fadeA, na = 255 - a;
+        for (int i = 0; i < s_directCount; ++i) {
+            const PS1DirectColour &c = s_directColours[i];
+            uint32_t r = (c.r * na + s_fadeR * a) / 255, g = (c.g * na + s_fadeG * a) / 255, b = (c.b * na + s_fadeB * a) / 255;
+            *c.word    = (*c.word & 0xFF000000) | r | g << 8 | b << 16;
+        }
+        g_ps1FadeDirect = g_ps1FadeDirect + s_directCount;
+    }
     int frameChunks = s_palChunkCount;
     PS1DrawBankRegions(clear);
     int end         = s_palChunkCount; // the regions filled their own chunks: refill only the frame-start rows
@@ -679,10 +715,8 @@ void ClearScreen(byte index)
 {
     PS1FrameStart(true);
     const PaletteEntry &c = fullPalette32[gfxLineBuffer[0]][index];
-    psyqo::Prim::Rectangle r(psyqo::Color{ { .r = c.r, .g = c.g, .b = c.b } });
-    r.position = psyqo::Vertex{ { .x = 0, .y = 0 } };
-    r.size     = psyqo::Vertex{ { .w = (int16_t)SCREEN_XSIZE, .h = SCREEN_YSIZE } };
-    PS1ChainRect(r);
+    uint32_t w[3] = { 0x60000000u | c.r | (uint32_t)c.g << 8 | (uint32_t)c.b << 16, 0, (uint32_t)SCREEN_XSIZE | (uint32_t)SCREEN_YSIZE << 16 };
+    PS1ChainFlatRaw(w, 3); // GP0 60h: flat rectangle
 }
 
 // upstream: draw subs are game logic too; only their Draw* calls produce primitives.
@@ -1424,20 +1458,21 @@ void DrawVLineScrollLayer(int layerID)
 // Rectangle at a PS1 alpha level (see PS1AlphaLevel): 50 % = B/2 + F/2, 75 % = twice.
 static void PS1ChainAlphaRect(int XPos, int YPos, int width, int height, int R, int G, int B, int level)
 {
-    psyqo::Prim::Rectangle r(psyqo::Color{ { .r = (uint8_t)R, .g = (uint8_t)G, .b = (uint8_t)B } });
-    r.position = psyqo::Vertex{ { .x = (int16_t)XPos, .y = (int16_t)YPos } };
-    r.size     = psyqo::Vertex{ { .w = (int16_t)width, .h = (int16_t)height } };
+    if (g_ps1ChainSkipPrims)
+        return;
+    uint32_t w[3] = { 0x60000000u | (uint32_t)(R & 0xFF) | (uint32_t)(G & 0xFF) << 8 | (uint32_t)(B & 0xFF) << 16,
+                      (uint32_t)(uint16_t)XPos | (uint32_t)(uint16_t)YPos << 16, (uint32_t)(uint16_t)width | (uint32_t)(uint16_t)height << 16 };
     if (level >= 3) {
-        PS1ChainRect(r);
+        PS1ChainFlatRaw(w, 3); // GP0 60h: flat rectangle
         return;
     }
     psyqo::PrimPieces::TPageAttr attr; // untextured semi-transparency takes its mode from the texpage
     attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
     PS1ChainTPage(attr);
-    r.setSemiTrans();
-    PS1ChainRect(r);
+    w[0] |= 0x02000000; // semi-transparent
+    PS1ChainFlatRaw(w, 3);
     if (level == 2)
-        PS1ChainRect(r);
+        PS1ChainFlatRaw(w, 3);
 }
 
 // The pending full-screen fade turned out not to end the frame: draw it now (4 levels).
@@ -1754,7 +1789,7 @@ void DrawFace(void *v, uint colour)
     uint32_t w[5];
     w[0] = 0x28000000 | semi | bgr; // GP0 28h flat quad, BGR
     for (int k = 0; k < 4; ++k) w[1 + k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
-    for (int i = 0; i < repeat; ++i) PS1ChainPrimsRawN(w, 5, 1);
+    for (int i = 0; i < repeat; ++i) PS1ChainFlatRaw(w, 5);
     g_ps1Faces = g_ps1Faces + 1;
 }
 
