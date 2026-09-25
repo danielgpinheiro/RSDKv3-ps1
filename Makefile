@@ -113,4 +113,16 @@ disc:
 	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv3.ps-exe none build/game
 	/usr/bin/python3 tools/disc/verify_disc.py build/game.bin build/iso rsdkv3.ps-exe none
 
-.PHONY: disc
+# Distribution image (docs/28 phase 10): the natural game (not a BOOT= / MEMCARD_TEST build) on a disc with
+# the license sectors from the workspace's LICENSE.DAT (read by path, never copied; LICENSE=none for an
+# unlicensed image), verified, as build/dist/SonicCD-PS1-<EN|JP>.bin/.cue + SHA256SUMS-<EN|JP>.
+LICENSE ?= ../LICENSE.DAT
+dist:
+	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1BootBuild; then echo "dist: rsdkv3.ps-exe is a BOOT= test build"; exit 1; fi
+	@lang=$$(/usr/bin/python3 -c "print({0: 'EN', 5: 'JP'}.get(open('build/iso/Data/Game/PS1Language.bin', 'rb').read()[0], 'XX'))"); \
+	mkdir -p build/dist && \
+	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv3.ps-exe $(LICENSE) build/dist/SonicCD-PS1-$$lang && \
+	/usr/bin/python3 tools/disc/verify_disc.py build/dist/SonicCD-PS1-$$lang.bin build/iso rsdkv3.ps-exe $(LICENSE) && \
+	cd build/dist && shasum -a 256 SonicCD-PS1-$$lang.bin SonicCD-PS1-$$lang.cue > SHA256SUMS-$$lang && cat SHA256SUMS-$$lang
+
+.PHONY: disc dist

@@ -58,6 +58,10 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
     g_ps1HeapHeadroom = ss - top;
 }
 
+#ifdef PS1_BOOT_FOLDER
+extern "C" const char g_ps1BootBuild[] = PS1_BOOT_FOLDER; // marks a `make BOOT=` test build (make dist refuses it)
+#endif
+
 namespace {
 
 class RSDKv3PS1App final : public psyqo::Application {
@@ -79,7 +83,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
 #ifdef PS1_BOOT_FOLDER
-        StrCopy(Engine.startSceneFolder, PS1_BOOT_FOLDER);
+        StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);
 #endif
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
