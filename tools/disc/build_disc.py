@@ -24,11 +24,18 @@ laid out in the order the game loads them (tools/disc/load_order.txt, from
 tools/load_profile.sh natural --order), then the other data files by path, then the streams, so
 cdrom_fs's read-ahead windows usually already hold the next file the game opens.
 
+File index (load-time phase): PS1FILES.IDX at the root lists every file of the tree (FNV-1a 32 hash of
+its lowercase path, LBA, size; sorted by hash), so ps1/cdrom_fs.cpp opens files without reading
+directory sectors (each directory miss cost a seek and stopped the load stream). The LBAs are only
+known after mastering: mkpsxiso runs with a zero-filled index of the final size, the image is walked,
+the index is written, and mkpsxiso runs again (same sizes and order = same layout; checked by walking
+the second image and reading the index back).
+
 Usage: build_disc.py [ISO_ROOT] [EXE] [LICENSE|none] [OUT_PREFIX]
   LICENSE none = no license data (the disc boots in emulators, on ODEs and modded consoles only)
   defaults: build/iso rsdkv3.ps-exe ../LICENSE.DAT build/game
 """
-import os, subprocess, sys
+import os, struct, subprocess, sys
 from xml.sax.saxutils import quoteattr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -83,6 +90,53 @@ def layout(iso_root):
     return data + [f for f in ordered + rest if f not in data], len(ordered)
 
 
+IDX_NAME = 'PS1FILES.IDX'
+
+
+def path_hash(path):
+    """FNV-1a 32 of the lowercase '/'-separated path (ps1/cdrom_fs.cpp pathHash)."""
+    h = 0x811C9DC5
+    for c in path.replace(os.sep, '/').lower().encode('latin1'):
+        h = ((h ^ c) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def iso_walk(binp):
+    """(path, lba, size) of every file in a MODE2/2352 image (directory sectors only are read)."""
+    f = open(binp, 'rb')
+
+    def user(lba):
+        f.seek(lba * 2352 + 24)
+        return f.read(2048)
+    out = []
+
+    def walk(lba, size, prefix):
+        for k in range((size + 2047) // 2048):
+            d, o = user(lba + k), 0
+            while o < 2048 and d[o]:
+                el, sz = struct.unpack_from('<I', d, o + 2)[0], struct.unpack_from('<I', d, o + 10)[0]
+                nm = d[o + 33:o + 33 + d[o + 32]]
+                if nm not in (b'\0', b'\1'):
+                    name = prefix + nm.decode('latin1').split(';')[0]
+                    if d[o + 25] & 2:
+                        walk(el, sz, name + '/')
+                    else:
+                        out.append((name, el, sz))
+                o += d[o]
+    pvd = user(16)
+    walk(struct.unpack_from('<I', pvd, 158)[0], struct.unpack_from('<I', pvd, 166)[0], '')
+    return out, user
+
+
+def index_bytes(entries):
+    """'FIX1', u32 count, 8 zero bytes, then {u32 hash, u32 lba, u32 size} sorted by hash."""
+    rows = sorted((path_hash(n), lba, sz) for n, lba, sz in entries)
+    hashes = [r[0] for r in rows]
+    if len(set(hashes)) != len(hashes):
+        sys.exit('ERROR: file index hash collision')
+    return struct.pack('<4sIII', b'FIX1', len(rows), 0, 0) + b''.join(struct.pack('<III', *r) for r in rows)
+
+
 def emit_file(rel, iso_root, out, counts):
     parts = rel.split(os.sep)
     full = os.path.join(iso_root, rel)
@@ -113,6 +167,9 @@ def main():
     tree.append('\t\t\t<file name="SYSTEM.CNF" source=%s date="%s"/>' % (quoteattr(cnf), DISC_DATE))
     tree.append('\t\t\t<file name="PSX.EXE" source=%s date="%s"/>' % (quoteattr(exe), DISC_DATE))
     files, n_ordered = layout(iso_root)
+    idx = os.path.join(work, IDX_NAME)
+    open(idx, 'wb').write(bytes(16 + 12 * len(files)))  # placeholder: final size, LBAs after mastering
+    tree.append('\t\t\t<file name="%s" source=%s date="%s"/>' % (IDX_NAME, quoteattr(idx), DISC_DATE))
     left_out = [f for f in disc_files(iso_root) if excluded(f)]
     left_bytes = sum(os.path.getsize(os.path.join(iso_root, f)) for f in left_out)
     for rel in files:
@@ -135,8 +192,20 @@ def main():
     xml_path = os.path.join(work, 'disc.xml')
     open(xml_path, 'w').write(xml)
     subprocess.run([MKPSXISO, '-y', '-q', '-w', xml_path], check=True)
+    entries = [e for e in iso_walk(out + '.bin')[0] if '/' in e[0]]
+    if len(entries) != len(files):
+        sys.exit('ERROR: %d files in the image, %d laid out' % (len(entries), len(files)))
+    table = index_bytes(entries)
+    open(idx, 'wb').write(table)
+    subprocess.run([MKPSXISO, '-y', '-q', '-w', xml_path], check=True)
+    again, user = iso_walk(out + '.bin')
+    if sorted(e for e in again if '/' in e[0]) != sorted(entries):
+        sys.exit('ERROR: the layout changed between the two mastering passes')
+    ie = [e for e in again if e[0] == IDX_NAME][0]
+    if b''.join(user(ie[1] + k) for k in range((ie[2] + 2047) // 2048))[:ie[2]] != table:
+        sys.exit('ERROR: %s on the disc differs from the table' % IDX_NAME)
     size = os.path.getsize(out + '.bin')
-    print('disc %s.bin/.cue: %.1f MB (%d sectors) | files: %s (%d in load order) | left out %d source files '
+    print('disc %s.bin/.cue: %.1f MB (%d sectors) | files: %s (%d in load order, indexed) | left out %d source files '
           '(%.1f MB) | license %s' % (
         out, size / 1048576, size // 2352, ', '.join('%s %d' % kv for kv in sorted(counts.items())), n_ordered,
         len(left_out), left_bytes / 1048576, os.path.basename(lic) if lic else 'none (emulators / modded consoles only)'))

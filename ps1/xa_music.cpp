@@ -20,6 +20,7 @@ extern psyqo::CDRomDevice *g_ps1CDRom;
 extern psyqo::GPU *g_ps1GPU;
 extern volatile uint32_t g_ps1PerfFrames;
 bool PS1FsFind(const char *path, uint32_t *lba, uint32_t *size); // cdrom_fs.cpp
+void PS1FsStopStream();                                          // cdrom_fs.cpp: one CD action at a time
 
 volatile uint32_t g_ps1XaStarts      = 0;
 volatile uint32_t g_ps1XaLoops       = 0;
@@ -219,6 +220,7 @@ void waitIdle() {
 }
 
 void startAction(bool resume) {
+    PS1FsStopStream();
     s_xa.running = true;
     s_action.clearPauseRequest();
     eastl::atomic_signal_fence(eastl::memory_order_release);
@@ -259,6 +261,7 @@ bool PS1XaInit() {
     // psyqo's reset never demutes the CD audio output (CD-DA / XA).
     static volatile bool s_demuted;
     s_demuted = false;
+    PS1FsStopStream();
     s_demute.start(&s_demuted);
     while (!s_demuted)
         g_ps1GPU->pumpCallbacks();

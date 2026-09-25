@@ -2,7 +2,7 @@
 """Disc load order for Sonic CD (docs/28 phase 9): tools/disc/load_order.txt, which build_disc.py lays out first.
 
 Every psyqo CD request costs a seek (~0.2 s in PCSX-Redux) on top of 6.7 ms per sector at 2x, so a load's
-time is its request count; the read-ahead windows (ps1/cdrom_fs, 32 sectors) serve several small files per
+time is its request count; the read-ahead windows (ps1/cdrom_fs, fed by the load stream) serve several small files per
 request when they sit back to back. The Nexus port recorded one playthrough's opens; Sonic CD has 85 stages,
 so this order is derived from the data instead, following what the engine opens (profiled on R11A:
 tools/load_profile.sh):

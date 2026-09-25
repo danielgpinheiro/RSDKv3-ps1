@@ -16,6 +16,7 @@
 
 extern psyqo::CDRomDevice *g_ps1CDRom;
 extern psyqo::GPU *g_ps1GPU;
+void PS1FsStopStream(); // cdrom_fs.cpp: one CD action at a time
 
 #define CD_SECTOR 2048
 
@@ -164,6 +165,7 @@ static bool openStream(uint32_t lba, uint32_t totalSectors, uint8_t *ring, uint3
                        uint8_t xaChannel) {
     if (!g_ps1CDRom || s_stream.running || !ring || !ringSectors)
         return false;
+    PS1FsStopStream();
     s_stream.xa        = xa;
     s_stream.xaFile    = xaFile;
     s_stream.xaChannel = xaChannel;

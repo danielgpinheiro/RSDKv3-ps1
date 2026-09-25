@@ -33,11 +33,13 @@ end
 tbreak PS1PerfTick if g_ps1PerfFrames == $STOP
 continue
 printf "DONE frame=%u requests=%u sectors=%u readUs=%u\n", g_ps1PerfFrames, g_ps1FsRequests, g_ps1FsSectors, g_ps1FsReadUs
+printf "STREAM starts=%u stale=%u skipped=%u errors=%u fallback=%u\n", g_ps1FsStreamStarts, g_ps1FsStreamStale, g_ps1FsStreamSkipped, g_ps1FsStreamErrors, g_ps1FsFallbackReads
+printf "FS indexHits=%u dirReads=%u dirHits=%u\n", g_ps1FsIndexHits, g_ps1FsDirReads, g_ps1FsDirHits
 detach
 GDBEOF
 pkill -f PCSX-Redux 2>/dev/null; sleep 1
 $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 sleep 4
-timeout ${TIMEOUT:-400} /opt/homebrew/bin/gdb --batch -x $G 2>&1 | grep -E "^(REQ|OPEN|LOAD|DONE)" > "$OUT"
+timeout ${TIMEOUT:-400} /opt/homebrew/bin/gdb --batch -x $G 2>&1 | grep -E "^(REQ|OPEN|LOAD|DONE|STREAM|FS)" > "$OUT"
 pkill -f PCSX-Redux
 /usr/bin/python3 tools/load_profile.py "$OUT" build/game.bin "${EXTRA[@]}"

@@ -180,6 +180,13 @@ def main():
     for name, el, sz in files:
         if build_disc.excluded(name):
             err('source-only file on the disc: %s' % name)
+        if name.upper() == build_disc.IDX_NAME:
+            table = b''.join(user(el + k) for k in range((sz + 2047) // 2048))[:sz]
+            want = build_disc.index_bytes([x for x in files if '/' in x[0]])
+            if table != want:
+                err('%s does not match the directory tree' % name)
+            compared += 1
+            continue
         if name.upper() == 'SYSTEM.CNF':
             cnf = user(el)[:sz]
             if b'BOOT = cdrom:\\PSX.EXE;1' not in cnf:
