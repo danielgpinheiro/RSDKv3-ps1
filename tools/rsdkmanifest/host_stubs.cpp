@@ -73,6 +73,12 @@ decltype(saveRAM) saveRAM{};
 decltype(sfxChannels) sfxChannels{};
 decltype(sfxVolume) sfxVolume{};
 decltype(stageLayouts) stageLayouts{};
+#if RETRO_PLATFORM == RETRO_PS1 // TileLayer::tiles is a pointer on PS1 (Scene.hpp): the same backing as Scene.cpp
+static ushort s_hostLayerTiles[LAYER_COUNT][TILELAYER_CHUNK_W * PS1_LAYER0_CHUNK_H];
+static struct HostLayerTiles {
+    HostLayerTiles() { for (int i = 0; i < LAYER_COUNT; ++i) stageLayouts[i].tiles = s_hostLayerTiles[i]; }
+} s_hostLayerTilesInit;
+#endif
 decltype(stageList) stageList{};
 decltype(stageListCount) stageListCount{};
 decltype(stageListPosition) stageListPosition{};

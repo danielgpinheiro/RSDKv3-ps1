@@ -32,6 +32,10 @@
 #include "gpu_chain.hh"
 #include "sprite_atlas.hh"
 #include "fmv.hh"
+#include <psyqo/gte-kernels.hh>
+#include <psyqo/gte-registers.hh>
+#include <psyqo/gte-kernels.hh>
+#include <psyqo/gte-registers.hh>
 #include "tileset.hh"
 #include "video.hh" // PS1Hblanks (profiling)
 
@@ -612,6 +616,7 @@ void DrawObjectList(int layer)
 
 void DrawHLineScrollLayer(int layerID);
 void DrawVLineScrollLayer(int layerID);
+static void PS1Draw3DFloor(int layerID);
 
 static void PS1DrawLayer(int layerID)
 {
@@ -621,7 +626,7 @@ static void PS1DrawLayer(int layerID)
         case LAYER_HSCROLL: DrawHLineScrollLayer(layerID); break;
         case LAYER_VSCROLL: DrawVLineScrollLayer(layerID); break;
         case LAYER_3DFLOOR:
-        case LAYER_3DSKY: g_ps1DrawTodo = g_ps1DrawTodo + 1; break; // phase 7 (GTE floor)
+        case LAYER_3DSKY: PS1Draw3DFloor(layerID); break;
         default: break;
     }
 }
@@ -1805,3 +1810,279 @@ void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int 
     }
 }
 void DrawTextMenu(void *menu, int XPos, int YPos) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
+
+// ---------------------------------------------------------------------------------------------------
+// 3D floor (docs/28 phase 7): the special stages' floor, upstream Draw3DFloorLayer / Draw3DSkyLayer (the sky
+// variant is the same floor at the PC's double resolution). Upstream walks the floor per screen row y =
+// 128 + i (i = 4..111): the row sees the floor at forward distance f = K / i (K = YPos * 3 / 2048, px) and
+// steps f / 192 floor px per screen pixel along (-cos, sin). So a floor point at forward f and lateral l
+// (px, camera frame) is on screen at x = 160 + 192 l / f, y = 128 + K / f. Here:
+//  - far rows (more than PS1_FLOOR_NEAR px ahead): one textured line each over the far-floor texture
+//    (tools/floor/build_floor.py: 1 texel per 16x16 tile, tile page 3), its ends computed as upstream's
+//    line walk and clipped to the floor; a row is affine in floor space, so GPU interpolation is exact;
+//  - near rows: every visible 16x16 floor tile as one textured quad through the projection above
+//    (vertices shared per grid row), clipped to those rows by the drawing area. PS1 textures are affine
+//    per quad; at 16 px per tile the warp stays small.
+#define PS1_FLOOR_NEAR      320 // px ahead drawn as tile quads (~350 at the special stages' camera height; farther rows: the far texture)
+#define PS1_FLOOR_MAX_QUADS 900
+#define PS1_FLOOR_GRID      120 // vertices per row buffer (2 rows x 120 x 4 bytes in the 1 KB scratchpad)
+#define PS1_FLOOR_S         8   // GTE input scale (1/8 px): |dx| <= 4095 px fits a 16-bit vertex
+#define PS1_FLOOR_SZMIN     97  // SZ below H / 2 (96) saturates the GTE divide: corner nearer than 12 px
+
+volatile uint32_t g_ps1FloorQuads = 0; // tile quads of the last floor
+volatile uint32_t g_ps1FloorLines = 0; // far textured lines of the last floor
+volatile uint32_t g_ps1FloorHbl   = 0; // CPU time of the last floor (hblanks)
+volatile int32_t  g_ps1FloorNearY = 0; // first screen row drawn with tile quads
+volatile uint32_t g_ps1FloorCand  = 0; // tiles visited for the last floor
+
+// Parameter interval [*t0, *t1] (screen x steps) where p0 + t * dp stays inside [0, max).
+static void PS1FloorClipAxis(int p0, int dp, int max, int *t0, int *t1)
+{
+    if (dp == 0) {
+        if (p0 < 0 || p0 >= max)
+            *t0 = 1, *t1 = 0;
+        return;
+    }
+    // t with p0 + t dp >= 0 and <= max - 1, rounded inward.
+    int lo, hi;
+    if (dp > 0) {
+        lo = p0 >= 0 ? 0 : (-p0 + dp - 1) / dp;
+        hi = (max - 1 - p0) >= 0 ? (max - 1 - p0) / dp : -1;
+    } else {
+        int n = -dp;
+        lo = p0 <= max - 1 ? 0 : (p0 - (max - 1) + n - 1) / n;
+        hi = p0 >= 0 ? p0 / n : -1;
+    }
+    if (lo > *t0)
+        *t0 = lo;
+    if (hi < *t1)
+        *t1 = hi;
+}
+
+static void PS1Draw3DFloor(int layerID)
+{
+    uint32_t t0      = PS1Hblanks();
+    TileLayer *layer = &stageLayouts[activeTileLayers[layerID]];
+    if (!layer->xsize || !layer->ysize || layer->YPos <= 0)
+        return;
+    PS1TileSetup();
+    int a      = layer->angle & 0x1FF;
+    int sn     = sinMLookupTable[a], cs = cosMLookupTable[a];
+    int floorW = layer->xsize << 7, floorH = layer->ysize << 7; // px
+    int camX   = layer->XPos >> 4, camZ = layer->ZPos >> 4; // 1/4096 px (upstream layerXPos, ZBuffer)
+    int yPos   = layer->YPos;
+    int K      = (int)((int64_t)yPos * 3 / 2048); // f = K / i (px)
+    if (K <= 0)
+        return;
+    int iNear = K / PS1_FLOOR_NEAR;
+    if (iNear < 4)
+        iNear = 4;
+    if (iNear > 112)
+        iNear = 112;
+    g_ps1FloorNearY = 128 + iNear;
+
+    // Far rows: upstream's line walk, one textured line per row over the far-floor texture.
+    int lines = 0;
+    if (g_ps1FloorTexW && g_ps1FloorScale == 16) {
+        uint32_t tpage = (uint32_t)(PS1_FLOOR_PAGE_X | (PS1_FLOOR_PAGE_Y << 4) | (1 << 7));
+        uint32_t clut  = s_tileClutWord;
+        uint32_t buf[16 * 9];
+        int n = 0;
+        PS1ChainDrawArea(0, 132, SCREEN_XSIZE, 128 + iNear);
+        for (int i = 4; i < iNear; ++i) {
+            int d  = yPos / (i << 9);
+            int xb = d * -cs >> 8, zb = sn * d >> 8;
+            int x0 = camX + (3 * sn * d >> 2) - xb * SCREEN_CENTERX;
+            int z0 = camZ + (3 * cs * d >> 2) - zb * SCREEN_CENTERX;
+            int tA = 0, tB = SCREEN_XSIZE - 1;
+            PS1FloorClipAxis(x0, xb, floorW << 12, &tA, &tB);
+            PS1FloorClipAxis(z0, zb, floorH << 12, &tA, &tB);
+            if (tA > tB)
+                continue;
+            int uA = (x0 + tA * xb) >> 16, vA = (z0 + tA * zb) >> 16;
+            int uB = (x0 + (tB + 1) * xb) >> 16, vB = (z0 + (tB + 1) * zb) >> 16;
+            uA = uA < 0 ? 0 : uA > 255 ? 255 : uA, vA = vA < 0 ? 0 : vA > 255 ? 255 : vA;
+            uB = uB < 0 ? 0 : uB > 255 ? 255 : uB, vB = vB < 0 ? 0 : vB > 255 ? 255 : vB;
+            uint32_t y = 128 + i, xl = (uint32_t)tA, xr = (uint32_t)(tB + 1);
+            uint32_t *q = &buf[n * 9];
+            q[0] = 0x2C808080;
+            q[1] = (y << 16) | xl;
+            q[2] = clut | ((uint32_t)vA << 8) | (uint32_t)uA;
+            q[3] = (y << 16) | xr;
+            q[4] = (tpage << 16) | ((uint32_t)vB << 8) | (uint32_t)uB;
+            q[5] = ((y + 1) << 16) | xl;
+            q[6] = ((uint32_t)vA << 8) | (uint32_t)uA;
+            q[7] = ((y + 1) << 16) | xr;
+            q[8] = ((uint32_t)vB << 8) | (uint32_t)uB;
+            ++lines;
+            if (++n == 16) {
+                PS1ChainPrimsRawN(buf, 9, n);
+                n = 0;
+            }
+        }
+        if (n)
+            PS1ChainPrimsRawN(buf, 9, n);
+    }
+    g_ps1FloorLines = lines;
+
+    // Near rows: projected tile quads over the floor region they see: the convex quadrilateral of the
+    // world points under the screen corners (rows 128 + iNear and 240, x = 0 and 320). Per 16-px tile row,
+    // only the tiles overlapping it are visited; their corners are projected by the GTE (RTPT) into two
+    // vertex rows in the scratchpad, indexed from the region's first tile column.
+    int px[4], pz[4];
+    for (int k = 0; k < 2; ++k) {
+        int i  = k ? 112 : iNear;
+        int d  = yPos / (i << 9);
+        int xb = d * -cs >> 8, zb = sn * d >> 8;
+        int x0 = camX + (3 * sn * d >> 2) - xb * SCREEN_CENTERX;
+        int z0 = camZ + (3 * cs * d >> 2) - zb * SCREEN_CENTERX;
+        for (int e = 0; e < 2; ++e) { // corner order around the quadrilateral: near-left, near-right, bottom-right, bottom-left
+            int c = k ? 3 - e : e;
+            px[c] = (x0 + e * SCREEN_XSIZE * xb) >> 12, pz[c] = (z0 + e * SCREEN_XSIZE * zb) >> 12;
+        }
+    }
+    int minX = px[0], maxX = px[0], minZ = pz[0], maxZ = pz[0];
+    for (int c = 1; c < 4; ++c) {
+        minX = px[c] < minX ? px[c] : minX, maxX = px[c] > maxX ? px[c] : maxX;
+        minZ = pz[c] < minZ ? pz[c] : minZ, maxZ = pz[c] > maxZ ? pz[c] : maxZ;
+    }
+    int tilesW = floorW >> 4, tilesH = floorH >> 4;
+    int tz0 = (minZ >> 4) - 1, tz1 = (maxZ >> 4) + 1;
+    tz0 = tz0 < 0 ? 0 : tz0, tz1 = tz1 > tilesH - 1 ? tilesH - 1 : tz1;
+    // x-range of the region inside world band [za, zb] (edge crossings + corners inside), in tiles
+    auto rowRange = [&](int za, int zb, int &ta, int &tb) {
+        int lo = 0x7FFFFFFF, hi = -0x7FFFFFFF;
+        for (int c = 0; c < 4; ++c) {
+            int n = (c + 1) & 3;
+            if (pz[c] >= za && pz[c] <= zb)
+                lo = px[c] < lo ? px[c] : lo, hi = px[c] > hi ? px[c] : hi;
+            int zlo = pz[c] < pz[n] ? pz[c] : pz[n], zhi = pz[c] < pz[n] ? pz[n] : pz[c];
+            if (zlo == zhi)
+                continue;
+            for (int zz = za; ; zz = zb) {
+                if (zz >= zlo && zz <= zhi) {
+                    int x = px[c] + (int)((int64_t)(zz - pz[c]) * (px[n] - px[c]) / (pz[n] - pz[c]));
+                    lo = x < lo ? x : lo, hi = x > hi ? x : hi;
+                }
+                if (zz == zb)
+                    break;
+            }
+        }
+        ta = (lo >> 4) - 1, tb = (hi >> 4) + 1;
+        ta = ta < 0 ? 0 : ta, tb = tb > tilesW - 1 ? tilesW - 1 : tb;
+    };
+    int quads = 0, cand = 0;
+    if (tz0 <= tz1 && minX < floorW && maxX >= 0) {
+        int gx0 = (minX >> 4) - 2;
+        gx0     = gx0 < 0 ? 0 : gx0;
+        // Vertex rows in the scratchpad (1 KB, unused elsewhere): 2 x PS1_FLOOR_GRID x (int16 x, y); x = 0x7FFF
+        // marks a corner too near for the GTE divide.
+        uint32_t *rowA = reinterpret_cast<uint32_t *>(0x1F800000), *rowB = rowA + PS1_FLOOR_GRID;
+        uint32_t *prev = rowA, *cur = rowB;
+        using namespace psyqo::GTE;
+        write<Register::R11R12, Unsafe>((uint32_t)(uint16_t)(int16_t)-cs);
+        write<Register::R13R21, Unsafe>((uint32_t)(uint16_t)(int16_t)sn);
+        clear<Register::R22R23, Unsafe>();
+        write<Register::R31R32, Unsafe>((uint32_t)(uint16_t)(int16_t)sn);
+        write<Register::R33, Unsafe>((uint32_t)(uint16_t)(int16_t)cs);
+        clear<Register::TRX, Unsafe>();
+        write<Register::TRY, Unsafe>((uint32_t)(K * PS1_FLOOR_S / 192));
+        clear<Register::TRZ, Unsafe>();
+        write<Register::OFX, Unsafe>((uint32_t)(SCREEN_CENTERX << 16));
+        write<Register::OFY, Unsafe>((uint32_t)(128 << 16));
+        write<Register::H, Safe>(192);
+        int camXs = camX >> 9, camZs = camZ >> 9; // 1/8 px
+        // GTE (psx-spx "GTE Coordinate Calculation Commands", RTPT): camera frame = rotation by the floor
+        // angle, lateral l along (-cos, sin), forward f along (sin, cos); vertex (dx, 0, dz) * S, TRY = K S / 192,
+        // H = 192, offsets (160, 128): SX = 160 + l * 192 / f, SY = 128 + (K / 192) * 192 / f = 128 + K / f.
+        auto project = [&](uint32_t *row, int wz, int ta, int tb) {
+            int dz = wz * PS1_FLOOR_S - camZs;
+            dz     = dz < -32767 ? -32767 : dz > 32767 ? 32767 : dz;
+            for (int tx = ta; tx <= tb + 1; tx += 3) {
+                uint32_t xy[3];
+                for (int j = 0; j < 3; ++j) {
+                    int dx = ((tx + j) << 4) * PS1_FLOOR_S - camXs;
+                    dx     = dx < -32767 ? -32767 : dx > 32767 ? 32767 : dx;
+                    xy[j]  = (uint16_t)dx; // VY = 0
+                }
+                write<Register::VXY0, Unsafe>(xy[0]);
+                write<Register::VZ0, Unsafe>((uint32_t)dz);
+                write<Register::VXY1, Unsafe>(xy[1]);
+                write<Register::VZ1, Unsafe>((uint32_t)dz);
+                write<Register::VXY2, Unsafe>(xy[2]);
+                write<Register::VZ2, Safe>((uint32_t)dz);
+                Kernels::rtpt();
+                uint32_t s0 = readRaw<Register::SXY0, Safe>(), s1 = readRaw<Register::SXY1, Safe>(), s2 = readRaw<Register::SXY2, Safe>();
+                uint32_t z1 = readRaw<Register::SZ1, Safe>(), z2 = readRaw<Register::SZ2, Safe>(), z3 = readRaw<Register::SZ3, Safe>();
+                uint32_t *v = &row[tx - gx0];
+                v[0] = (z1 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s0;
+                v[1] = (z2 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s1;
+                v[2] = (z3 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s2;
+            }
+        };
+        PS1ChainDrawArea(0, 128 + iNear, SCREEN_XSIZE, SCREEN_YSIZE);
+        int yTop = 128 + iNear;
+        int taPrev, tbPrev, ta, tb, taNext, tbNext;
+        rowRange(tz0 << 4, (tz0 << 4) + 16, ta, tb);
+        rowRange((tz0 << 4) - 16, tz0 << 4, taPrev, tbPrev);
+        // top vertex row of the first tile row: covers this and the (empty) previous tile row
+        project(prev, tz0 << 4, ta < taPrev ? ta : taPrev, tb > tbPrev ? tb : tbPrev);
+        for (int tz = tz0; tz <= tz1 && quads < PS1_FLOOR_MAX_QUADS; ++tz) {
+            rowRange((tz + 1) << 4, ((tz + 1) << 4) + 16, taNext, tbNext);
+            int ua = ta < taNext ? ta : taNext, ub = tb > tbNext ? tb : tbNext;
+            if (ub + 2 - gx0 > PS1_FLOOR_GRID)
+                ub = gx0 + PS1_FLOOR_GRID - 2;
+            project(cur, (tz + 1) << 4, ua, ub);
+            const ushort *chunkRow = &layer->tiles[(tz >> 3) << 8];
+            int te = tb + 1 - gx0 > PS1_FLOOR_GRID - 1 ? gx0 + PS1_FLOOR_GRID - 2 : tb;
+            for (int tx = ta; tx <= te && quads < PS1_FLOOR_MAX_QUADS; ++tx) {
+                ++cand;
+                uint32_t A = prev[tx - gx0], B = prev[tx - gx0 + 1], C = cur[tx - gx0], D = cur[tx - gx0 + 1];
+                if (A == 0x7FFF || B == 0x7FFF || C == 0x7FFF || D == 0x7FFF)
+                    continue; // a corner under 12 px ahead: the whole tile is below the screen
+                int ax = (int16_t)A, bx = (int16_t)B, cx = (int16_t)C, dx = (int16_t)D;
+                int ay = (int32_t)A >> 16, by = (int32_t)B >> 16, cy = (int32_t)C >> 16, dy = (int32_t)D >> 16;
+                int x0 = ax < bx ? ax : bx, x1 = ax < bx ? bx : ax, y0 = ay < by ? ay : by, y1 = ay < by ? by : ay;
+                x0 = cx < x0 ? cx : x0, x1 = cx > x1 ? cx : x1, y0 = cy < y0 ? cy : y0, y1 = cy > y1 ? cy : y1;
+                x0 = dx < x0 ? dx : x0, x1 = dx > x1 ? dx : x1, y0 = dy < y0 ? dy : y0, y1 = dy > y1 ? dy : y1;
+                if (x1 < 0 || x0 >= SCREEN_XSIZE || y1 < yTop || y0 >= SCREEN_YSIZE || x1 - x0 > 1023 || y1 - y0 > 511)
+                    continue;
+                uint16_t tv = s_tileVis[(chunkRow[tx >> 3] << 6) + (tx & 7) + ((tz & 7) << 3)];
+                if (!(tv & PS1_TV_SOLID))
+                    continue;
+                int t = tv & PS1_TV_INDEX, dir = (tv >> PS1_TV_DIR_SHIFT) & 3;
+                int page = t >> 8, pt = t & 0xFF;
+                int u = (pt & 0xF) << 4, v = (pt >> 4) << 4;
+                int uL = u, uR = u + 15, vT = v, vB = v + 15;
+                if (dir & FLIP_X)
+                    uL = u + 15, uR = u;
+                if (dir & FLIP_Y)
+                    vT = v + 15, vB = v;
+                uint32_t tpage = (uint32_t)((PS1_TILE_PAGE_X + 2 * (page & 1)) | ((PS1_TILE_PAGE_Y + (page >> 1)) << 4) | (1 << 7));
+                uint32_t *q = PS1ChainRawBegin(9);
+                if (!q)
+                    break;
+                q[0] = 0x2C808080;
+                q[1] = A;
+                q[2] = s_tileClutWord | ((uint32_t)vT << 8) | (uint32_t)uL;
+                q[3] = B;
+                q[4] = (tpage << 16) | ((uint32_t)vT << 8) | (uint32_t)uR;
+                q[5] = C;
+                q[6] = ((uint32_t)vB << 8) | (uint32_t)uL;
+                q[7] = D;
+                q[8] = ((uint32_t)vB << 8) | (uint32_t)uR;
+                PS1ChainRawEnd();
+                ++quads;
+            }
+            uint32_t *tmp = prev;
+            prev          = cur;
+            cur           = tmp;
+            ta = taNext, tb = tbNext;
+        }
+    }
+    g_ps1FloorCand = cand;
+    PS1ChainDrawAreaReset();
+    g_ps1FloorQuads = quads;
+    g_ps1FloorHbl   = PS1HblanksSince(t0);
+}
+

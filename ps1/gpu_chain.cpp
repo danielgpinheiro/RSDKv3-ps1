@@ -388,6 +388,23 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n) {
     }
 }
 
+static VarFragment *s_rawFrag = nullptr;
+uint32_t *PS1ChainRawBegin(int words) {
+    if (g_ps1ChainSkipPrims || words <= 0 || words > PS1_CHAIN_MAX_WORDS)
+        return nullptr;
+    runHook();
+    flushBatch();
+    s_rawFrag = allocVar(words);
+    return s_rawFrag ? s_rawFrag->data : nullptr;
+}
+
+void PS1ChainRawEnd() {
+    if (s_rawFrag)
+        s_gpu->chain(*s_rawFrag);
+    s_rawFrag    = nullptr;
+    s_tpageValid = false;
+}
+
 void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n) {
     if (g_ps1ChainSkipPrims || n <= 0 || wpp <= 0 || wpp > PS1_CHAIN_MAX_WORDS)
         return;

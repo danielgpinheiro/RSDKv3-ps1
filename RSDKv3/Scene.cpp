@@ -22,9 +22,10 @@ volatile uint32_t g_ps1ProfDrawHbl    = 0; // DrawStageGFX: draw subs (+ drawing
 // position stays right; counted for GDB until the Credits FG (128 rows) gets its own handling.
 volatile uint32_t g_ps1LayerRowsClamped = 0;
 static ushort s_ps1LayerScratchRow[TILELAYER_CHUNK_W];
+static inline int PS1LayerChunkRows(int layer);
 static ushort *PS1LayerRow(int layer, int y)
 {
-    if (y < TILELAYER_CHUNK_H)
+    if (y < PS1LayerChunkRows(layer))
         return &stageLayouts[layer].tiles[y * 0x100];
     g_ps1LayerRowsClamped = g_ps1LayerRowsClamped + 1;
     return s_ps1LayerScratchRow;
@@ -100,6 +101,18 @@ byte titleCardWord2 = 0;
 byte activeTileLayers[4];
 byte tLayerMidPoint;
 TileLayer stageLayouts[LAYER_COUNT];
+#if RETRO_PLATFORM == RETRO_PS1
+static ushort s_ps1Layer0Tiles[TILELAYER_CHUNK_W * PS1_LAYER0_CHUNK_H];
+static ushort s_ps1LayerTiles[LAYER_COUNT - 1][TILELAYER_CHUNK_COUNT];
+static struct PS1LayerTiles {
+    PS1LayerTiles()
+    {
+        stageLayouts[0].tiles = s_ps1Layer0Tiles;
+        for (int i = 1; i < LAYER_COUNT; ++i) stageLayouts[i].tiles = s_ps1LayerTiles[i - 1];
+    }
+} s_ps1LayerTilesInit;
+static inline int PS1LayerChunkRows(int layer) { return layer ? TILELAYER_CHUNK_H : PS1_LAYER0_CHUNK_H; }
+#endif
 
 int bgDeformationData0[DEFORM_COUNT];
 int bgDeformationData1[DEFORM_COUNT];
@@ -622,6 +635,7 @@ void LoadStageFiles(void)
             static uint8_t pal[768];
             if (PS1TileSetLoad(stageList[activeStageList][stageListPosition].folder, pal))
                 for (int c = 0x80; c < 0x100; ++c) SetPaletteEntry(-1, c, pal[c * 3], pal[c * 3 + 1], pal[c * 3 + 2]);
+            PS1FloorLoad(stageList[activeStageList][stageListPosition].folder); // special stages: far floor (tile page 3)
             PS1AtlasLoad(stageList[activeStageList][stageListPosition].folder, playerListPos);
             PS1LoadBGStrips(stageList[activeStageList][stageListPosition].folder, playerListPos); // after the atlas (shares its VRAM)
         }
@@ -716,7 +730,11 @@ void LoadActLayout()
         newXBoundary2 = stageLayouts[0].xsize << 7;
         newYBoundary2 = stageLayouts[0].ysize << 7;
 
+#if RETRO_PLATFORM == RETRO_PS1
+        for (int i = 0; i < TILELAYER_CHUNK_W * PS1_LAYER0_CHUNK_H; ++i) stageLayouts[0].tiles[i] = 0;
+#else
         for (int i = 0; i < TILELAYER_CHUNK_COUNT; ++i) stageLayouts[0].tiles[i] = 0; // was 0x10000 (PC size)
+#endif
 
         byte fileBuffer = 0;
         for (int y = 0; y < stageLayouts[0].ysize; ++y) {
@@ -851,7 +869,11 @@ void LoadStageBackground()
             stageLayouts[i].scrollSpeed = fileBuffer << 10;
             stageLayouts[i].scrollPos   = 0;
 
+#if RETRO_PLATFORM == RETRO_PS1
+            memset(stageLayouts[i].tiles, 0, TILELAYER_CHUNK_W * PS1LayerChunkRows(i) * sizeof(ushort));
+#else
             memset(stageLayouts[i].tiles, 0, TILELAYER_CHUNK_COUNT * sizeof(ushort));
+#endif
             byte *lineScrollPtr = stageLayouts[i].lineScroll;
             memset(stageLayouts[i].lineScroll, 0, TILELAYER_SCROLL_COUNT); // was 0x7FFF (PC size)
 

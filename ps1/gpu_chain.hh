@@ -66,6 +66,10 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n);
 void PS1ChainSpriteRawN(const uint32_t *words, int n);
 // Bulk raw GP0 primitives of `wpp` words each (e.g. 9 = textured quad), as many per fragment as fit in
 // 14 words. Textured polygons carry their own texpage: the tracked texpage state is invalidated.
+// One primitive of `words` (<= 14) written straight into the chain: PS1ChainRawBegin returns where to write
+// (nullptr: the arena is full), PS1ChainRawEnd links it. Saves a staging copy for many small primitives.
+uint32_t *PS1ChainRawBegin(int words);
+void PS1ChainRawEnd();
 void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n);
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
 void PS1ChainQuad(const psyqo::Prim::TexturedQuad &q);         // note: quads carry their own texpage

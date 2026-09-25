@@ -18,6 +18,9 @@
 // PS1 (2 MB): regular stages' layers are <= 18 chunks tall (docs/28 phase 1); taller rows (the
 // Credits FG, 128) are clamped at load and counted (g_ps1LayerRowsClamped) until handled.
 #define TILELAYER_CHUNK_H      (0x14)
+// Layer 0 (the FG, also the special stages' 3D floor: 32 x 32 chunks) gets more rows: TileLayer::tiles is
+// a pointer on PS1, layer 0 into a taller buffer (Scene.cpp). Rows past it (Credits FG) are still clamped.
+#define PS1_LAYER0_CHUNK_H     (0x20)
 #else
 #define TILELAYER_CHUNK_H      (0x100)
 #endif
@@ -107,7 +110,11 @@ struct CollisionMasks {
 };
 
 struct TileLayer {
+#if RETRO_PLATFORM == RETRO_PS1
+    ushort *tiles; // TILELAYER_CHUNK_W x (layer 0: PS1_LAYER0_CHUNK_H, others TILELAYER_CHUNK_H) rows, Scene.cpp
+#else
     ushort tiles[TILELAYER_CHUNK_COUNT];
+#endif
     byte lineScroll[TILELAYER_SCROLL_COUNT];
     int parallaxFactor;
     int scrollSpeed;

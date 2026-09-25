@@ -75,3 +75,40 @@ bool PS1TileSetLoad(const char *folder, uint8_t *pal768) {
     g_ps1TileSetLoads = g_ps1TileSetLoads + 1;
     return true;
 }
+
+int g_ps1FloorTexW = 0, g_ps1FloorTexH = 0, g_ps1FloorScale = 16;
+
+bool PS1FloorLoad(const char *folder) {
+    g_ps1FloorTexW = g_ps1FloorTexH = 0;
+    char path[96];
+    snprintf(path, sizeof(path), "Data/Stages/%s/Floor.vram", folder);
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return false; // not a special stage
+    uint8_t hdr[12];
+    bool ok = fread(hdr, 1, 12, f) == 12 && hdr[0] == 'F' && hdr[1] == 'L' && hdr[2] == 'R' && hdr[3] == '1';
+    int w = hdr[4] | (hdr[5] << 8), h = hdr[6] | (hdr[7] << 8), scale = hdr[8] | (hdr[9] << 8);
+    ok = ok && w > 0 && w <= 256 && !(w & 1) && h > 0 && h <= 256 && scale > 0;
+    uint16_t *staging = ok ? (uint16_t *)psyqo_malloc(STAGING_LINES * PAGE_HW * 2) : nullptr;
+    if (staging) {
+        PS1GpuImmediate();
+        for (int y = 0; ok && y < h; y += STAGING_LINES) {
+            int n     = h - y < STAGING_LINES ? h - y : STAGING_LINES;
+            size_t sz = (size_t)w * n;
+            ok        = fread(staging, 1, sz, f) == sz;
+            if (ok)
+                g_ps1GPU->uploadToVRAM(staging, psyqo::Rect{{(int16_t)(PS1_FLOOR_PAGE_X * 64), (int16_t)(PS1_FLOOR_PAGE_Y * 256 + y)},
+                                                            {(int16_t)(w / 2), (int16_t)n}});
+        }
+        psyqo_free(staging);
+    } else {
+        ok = false;
+    }
+    fclose(f);
+    if (ok) {
+        g_ps1FloorTexW  = w;
+        g_ps1FloorTexH  = h;
+        g_ps1FloorScale = scale;
+    }
+    return ok;
+}

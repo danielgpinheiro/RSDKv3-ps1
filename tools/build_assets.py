@@ -7,6 +7,7 @@ Steps (golden rule: nothing is decoded at runtime; every converter checks its ow
   3. atlas    tools/atlas/build_atlas.py -> Data/Sprites/Atlas/<Stage>.atl (per-stage VRAM sprites)
   4. tiles    tools/tiles/convert_tiles.py -> Data/Stages/*/16x16Tiles.vram (VRAM tile pages)
   5. strips   tools/bgstrips/build_bgstrips.py -> Data/Stages/*/BGStrips[_t].bin (BG line strips, per player)
+     floor    tools/floor/build_floor.py -> Data/Stages/SS*/Floor.vram (special stages' far floor)
   6. sfx      tools/audio/build_sfx.py -> Data/SoundFX/**/*.vag (SPU-ADPCM, one rate per file) +
               Data/Stages/Secrets/SFX/ (its own lower-rate copies), Data/Game/PS1SfxStages.bin
   7. music    tools/audio/build_music.py -> Data/Music/Music.xa + Music.bin (CD-XA, 68 tracks, 8 channels)
@@ -89,6 +90,8 @@ def main():
     print('[4 lang] Data/Game/PS1Language.bin = %s' % a.lang)
     r = run('5 bgstrips', [PY, os.path.join(HERE, 'bgstrips', 'build_bgstrips.py'), data], capture_output=True, text=True)
     print('[5 bgstrips] %d files (self-checked), per player' % sum(1 for l in r.stdout.splitlines() if ' regions ' in l and ' regions  0 ' not in l))
+    r = run('5 floor', [PY, os.path.join(HERE, 'floor', 'build_floor.py'), data], capture_output=True, text=True)
+    print('[5 floor] %d special stages: far-floor textures' % len(r.stdout.splitlines()))
     r = run('6 sfx', [PY, os.path.join(HERE, 'audio', 'build_sfx.py'), data], capture_output=True, text=True)
     print('[6 sfx] ' + ' '.join(l for l in r.stdout.splitlines() if l.startswith('sfx ')))
     r = run('7 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), data], capture_output=True, text=True)
