@@ -13,6 +13,8 @@ PS1 the button opens `Options Menu`, without INSTRUCTIONS:
     (OBJECTVALUE1: music stop, the entry's action, the stage it loads) see entry k + 1 of the original;
   - its entry labels (sprite frames 10-13, highlighted 14-17) move up one, so entry k shows label k + 1;
   - draw: the 4th entry slot is moved off screen (its `Add OBJECTYPOS, 40` -> -1000).
+Special stages (docs/28 special-stage speed): Special Setup's draw sub, a bubble sort of draw list 3 in
+script, becomes one PS1SortDrawList instruction (a PS1 engine opcode running the same loop natively).
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected
 stops the build. Already patched files are recognised and left alone.
 
@@ -75,9 +77,12 @@ def instructions(code, start, names, vars_):
             if t == 1:
                 arr = code[p]
                 p += 1
+                idx = None
                 if arr in (1, 2, 3):
+                    idx = (code[p], code[p + 1])  # (1 = array position register, else constant), value
                     p += 2
-                ops.append(('var', (vars_[code[p]].replace('VAR_', ''), arr), p))
+                ops.append(('var', (vars_[code[p]].replace('VAR_', ''), arr) if idx is None else
+                            (vars_[code[p]].replace('VAR_', ''), arr, idx), p))
                 p += 1
             elif t == 2:
                 ops.append(('int', code[p], p))
@@ -165,9 +170,66 @@ def patch_options(data):
     return 'HELP & OPTIONS -> %s (type %d, was %d): SETTINGS / STAFF CREDITS / ABOUT' % (objs[opts], type_opts, type_optsc)
 
 
+# Special Setup's draw sub in every special stage: sort draw list 3 by OBJECTVALUE5, descending (a bubble
+# sort in script, ~45 hblanks a frame) -> PS1SortDrawList 3, 5 (RSDKv3/Script.cpp: the same loop natively,
+# down to the temp values and array positions it leaves), then End.
+SS_SORT = [
+    ('Equal', [('var', ('TEMPVALUE0', 0)), ('int', 0)]),
+    ('Equal', [('var', ('TEMPVALUE1', 0)), ('var', ('SCREENDRAWLISTSIZE', 1, (0, 3)))]),
+    ('WLower', [('int', 0), ('var', ('TEMPVALUE0', 0)), ('var', ('TEMPVALUE1', 0))]),
+    ('Equal', [('var', ('TEMPVALUE2', 0)), ('var', ('TEMPVALUE1', 0))]),
+    ('Dec', [('var', ('TEMPVALUE2', 0))]),
+    ('WGreater', [('int', 2), ('var', ('TEMPVALUE2', 0)), ('var', ('TEMPVALUE0', 0))]),
+    ('Equal', [('var', ('TEMPVALUE3', 0)), ('var', ('TEMPVALUE2', 0))]),
+    ('Dec', [('var', ('TEMPVALUE2', 0))]),
+    ('GetDrawListEntityRef', [('var', ('ARRAYPOS0', 0)), ('int', 3), ('var', ('TEMPVALUE3', 0))]),
+    ('GetDrawListEntityRef', [('var', ('ARRAYPOS1', 0)), ('int', 3), ('var', ('TEMPVALUE2', 0))]),
+    ('IfGreater', [('int', 4), ('var', ('OBJECTVALUE5', 1, (1, 0))), ('var', ('OBJECTVALUE5', 1, (1, 1)))]),
+    ('SetDrawListEntityRef', [('var', ('ARRAYPOS0', 0)), ('int', 3), ('var', ('TEMPVALUE2', 0))]),
+    ('SetDrawListEntityRef', [('var', ('ARRAYPOS1', 0)), ('int', 3), ('var', ('TEMPVALUE3', 0))]),
+    ('endif', []),
+    ('loop', []),
+    ('Inc', [('var', ('TEMPVALUE0', 0))]),
+    ('loop', []),
+    ('End', []),
+]
+
+
+def game_stage_lists(data):
+    sys.path.insert(0, os.path.join(HERE, '..', 'disc'))
+    import gen_load_order
+    return gen_load_order.game_config(data)[2]
+
+
+def patch_ss_sort(data):
+    names, vars_ = bs.tables()
+    op = [n for n, _ in names].index('PS1SortDrawList')
+    done, already = [], []
+    for pos, (folder, _) in enumerate(game_stage_lists(data)[3]):  # the special stage list: SS000.bin...
+        path = os.path.join(data, 'Scripts', 'ByteCode', 'SS%03d.bin' % pos)
+        obj, _ = object_index(data, folder, 'Special Setup')
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        start = bs.subs(path)[obj][2]
+        if code[start] == op:
+            already.append(folder)
+            continue
+        got = [(n, [(o[0], o[1]) for o in ops]) for _, n, ops in instructions(code, start, names, vars_)]
+        if got != SS_SORT:
+            sys.exit('ERROR patch_bytecode: %s Special Setup draw sub is not the expected draw-list sort' % folder)
+        code[start:start + 6] = [op, 2, 3, 2, 5, 0]  # PS1SortDrawList 3, 5 / End
+        open(path, 'wb').write(encode(code) + rest)
+        c2, q = bs.blocks(open(path, 'rb').read(), 0)
+        assert c2 == code
+        done.append(folder)
+    return 'draw-list sort native in %s%s' % (' '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
+    print('SS*.bin: ' + patch_ss_sort(data))
 
 
 if __name__ == '__main__':

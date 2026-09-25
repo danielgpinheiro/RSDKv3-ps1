@@ -495,8 +495,12 @@ const FunctionInfo functions[] = {
     FunctionInfo("SetLeaderboard", 2),
     FunctionInfo("LoadOnlineMenu", 1),
     FunctionInfo("EngineCallback", 1),
-#if RETRO_USE_HAPTICS
-    FunctionInfo("HapticEffect", 4),
+#if RETRO_USE_HAPTICS || RETRO_PLATFORM == RETRO_PS1
+    FunctionInfo("HapticEffect", 4), // PS1: kept (a no-op) so the opcodes after it number as in the tools
+#endif
+#if RETRO_PLATFORM == RETRO_PS1
+    // PS1 extension, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/28).
+    FunctionInfo("PS1SortDrawList", 2),
 #endif
 };
 
@@ -921,8 +925,11 @@ enum ScrFunction {
     FUNC_SETLEADERBOARD,
     FUNC_LOADONLINEMENU,
     FUNC_ENGINECALLBACK,
-#if RETRO_USE_HAPTICS
+#if RETRO_USE_HAPTICS || RETRO_PLATFORM == RETRO_PS1
     FUNC_HAPTICEFFECT,
+#endif
+#if RETRO_PLATFORM == RETRO_PS1
+    FUNC_PS1SORTDRAWLIST,
 #endif
     FUNC_MAX_CNT
 };
@@ -4210,6 +4217,40 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 opcodeSize = 0;
                 Engine.Callback(scriptEng.operands[0]);
                 break;
+#if RETRO_PLATFORM == RETRO_PS1
+#if !RETRO_USE_HAPTICS
+            case FUNC_HAPTICEFFECT: opcodeSize = 0; break;
+#endif
+            case FUNC_PS1SORTDRAWLIST: {
+                // Sonic CD's special stages sort draw list 3 by OBJECTVALUE5 (depth) every frame in their
+                // Special Setup draw sub: a bubble sort in script, O(n^2) VM instructions (~45 hblanks). The
+                // same loop natively, down to the temp values and array positions it leaves behind:
+                //   t0 = 0, t1 = size; while (t0 < t1) { t2 = t1 - 1; while (t2 > t0) { t3 = t2--;
+                //   a0 = ref[t3], a1 = ref[t2]; if (value[a0] > value[a1]) swap } ++t0 }
+                opcodeSize = 0;
+                int layer = scriptEng.operands[0], v = scriptEng.operands[1];
+                if ((uint)layer >= DRAWLAYER_COUNT || (uint)v >= 8)
+                    break;
+                DrawListEntry &list = drawListEntries[layer];
+                int *t = scriptEng.tempValue, *ap = scriptEng.arrayPosition;
+                t[0] = 0;
+                t[1] = list.listSize;
+                while (t[0] < t[1]) {
+                    t[2] = t[1] - 1;
+                    while (t[2] > t[0]) {
+                        t[3] = t[2]--;
+                        ap[0] = list.entityRefs[t[3]];
+                        ap[1] = list.entityRefs[t[2]];
+                        if (objectEntityList[ap[0]].values[v] > objectEntityList[ap[1]].values[v]) {
+                            list.entityRefs[t[2]] = ap[0];
+                            list.entityRefs[t[3]] = ap[1];
+                        }
+                    }
+                    ++t[0];
+                }
+                break;
+            }
+#endif
 #if RETRO_USE_HAPTICS
             case FUNC_HAPTICEFFECT:
                 opcodeSize = 0;
