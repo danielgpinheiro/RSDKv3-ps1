@@ -35,6 +35,9 @@ tools/vram_test.sh STAGE[_t]    # tile pages, atlas, BG strips, palette in VRAM 
 tools/perf_zones.sh OUT STAGE.. # frame-time survey across stages (worst frame vs 262 hblanks)
 tools/boot_test.sh [OUT F1 F2]  # headless boot: loads (vblanks), perf, profile, heap, guards
 make BOOT=R11A && tools/logic_test.sh   # start in a stage; drive the player via g_ps1PadTestMask
+tools/load_profile.sh OUT.log [STOP]    # CD requests / files per load (a BOOT= build)
+tools/memcard/save_test.sh [WORKDIR]    # save / reload on temporary card images (config backed up)
+make dist                               # licensed (../LICENSE.DAT by path), verified image in build/dist/
 tools/scene3d/sort3d_check.sh   # host: PS1 3D draw-list sort == upstream order
 python3 tools/bytecode_scan.py DATA --find X --values VAR [--where RS000.bin]   # who uses what
 ```
