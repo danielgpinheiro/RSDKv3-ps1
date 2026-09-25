@@ -209,10 +209,51 @@ static bool s_frameFresh = false; // this frame started with a clear
 
 static void PS1ClearClusterCache();
 
+// Adaptive frame skip (user decision 2026-09-25). A frame over its budget (262 hblanks at 60 Hz: special
+// stages, the Title) made the game run slower than real time: psyqo shows one game frame per vblank at
+// most, with no catch-up. Now the renderer keeps the lateness of the game clock in hblanks (each frame
+// adds its flip-to-flip time minus one field); while it is over a quarter field, the next frame still
+// runs all the game logic, draw subs included (they carry state: animation timers, sorting), but chains
+// no primitives: no layers, floor, 3D scene or sprites, the previous picture is repeated. At least one
+// frame in PS1_SKIP_MAX_RUN + 1 is drawn; a gap over 4 fields (a load) is forgotten, not caught up.
+#define PS1_SKIP_MAX_RUN 2
+static bool s_skipDraw = false;
+static bool s_skipClock = false;
+static uint32_t s_skipLast = 0;
+static int s_skipRun = 0, s_lateness = 0;
+volatile uint32_t g_ps1SkippedFrames = 0; // frames that ran the game logic without drawing
+volatile int32_t  g_ps1Lateness      = 0; // game clock behind real time (hblanks), at the last frame start
+bool PS1SkipDraw() { return s_skipDraw; }
+
+static void PS1FrameSkipDecide(psyqo::GPU &gpu)
+{
+    int period   = gpu.getRefreshRate() == 50 ? 314 : 263; // lines per field (psx-spx: 263 NTSC, 314 PAL)
+    uint32_t now = PS1Hblanks();
+    if (s_skipClock) {
+        int dt = (int)PS1HblanksSince(s_skipLast);
+        if (dt > 4 * period)
+            s_lateness = 0;
+        else {
+            s_lateness += dt - period;
+            s_lateness = s_lateness < 0 ? 0 : s_lateness > 2 * period ? 2 * period : s_lateness;
+        }
+    }
+    s_skipClock   = true;
+    s_skipLast    = now;
+    g_ps1Lateness = s_lateness;
+    bool skip     = s_lateness > period / 4 && s_skipRun < PS1_SKIP_MAX_RUN && Engine.gameMode == ENGINE_MAINGAME;
+    s_skipDraw    = skip;
+    s_skipRun     = skip ? s_skipRun + 1 : 0;
+    if (skip)
+        g_ps1SkippedFrames = g_ps1SkippedFrames + 1;
+}
+
 static void PS1FrameStart(bool clear)
 {
     if (s_frameOpen || !s_chainOpen)
         return;
+    if (s_skipDraw)
+        clear = false; // a skipped frame repeats the last picture
     s_frameOpen      = true;
     s_frameFresh     = clear;
     g_ps1DrawSprites = 0;
@@ -249,6 +290,7 @@ static bool s_fmvFrame = false; // this frame shows an FMV (ps1/fmv.cpp): FlipSc
 
 void PS1RenderBeginFrame(psyqo::GPU &gpu)
 {
+    PS1FrameSkipDecide(gpu);
     PS1ChainBegin(gpu);
     PS1AtlasServicePictures(); // on-demand pictures the last frame asked for (nothing chained yet)
     PS1FmvBeginFrame();        // FMV open / close (swaps the chain arenas: nothing chained yet)
@@ -437,7 +479,7 @@ template <typename Fn> static void PS1ForEachPieceAtlas(int sheet, int sheetID, 
     }
 }
 
-static inline bool PS1ObjectsHidden() { return (g_ps1DebugDrawMask & 1) != 0; }
+static inline bool PS1ObjectsHidden() { return s_skipDraw || (g_ps1DebugDrawMask & 1) != 0; }
 
 // Ink state for the next pieces: GPU semi-transparency mode (psx-spx GP0 E1h bits 5-6) and the texel
 // modulation (0x80 = unchanged). Set by the ink draw calls around their piece loops.
@@ -749,7 +791,7 @@ static void PS1Draw3DFloor(int layerID);
 
 static void PS1DrawLayer(int layerID)
 {
-    if (activeTileLayers[layerID] >= LAYER_COUNT)
+    if (activeTileLayers[layerID] >= LAYER_COUNT || s_skipDraw)
         return;
     switch (stageLayouts[activeTileLayers[layerID]].type) {
         case LAYER_HSCROLL: DrawHLineScrollLayer(layerID); break;

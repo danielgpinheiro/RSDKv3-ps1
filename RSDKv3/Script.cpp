@@ -3918,6 +3918,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 opcodeSize = 0;
 #if RETRO_PLATFORM == RETRO_PS1
             {
+                extern bool PS1SkipDraw();
+                if (PS1SkipDraw()) // a frame skipped by ps1/render.cpp: nothing drawn (the scene has no script-visible state)
+                    break;
                 uint32_t t0 = PS1Hblanks();
                 TransformVertexBuffer();
                 uint32_t t1 = PS1Hblanks();
