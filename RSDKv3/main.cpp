@@ -40,6 +40,7 @@ void PS1VideoTestService();                 // RSDKv3/Video.cpp (GDB test hook)
 void PS1SaveTestService();                  // RSDKv3/Userdata.cpp (GDB test hook)
 void PS1McPrepare();                        // ps1/memcard.cpp
 void PS1RenderEndFrame();
+void PS1IrqGuardInstall();                  // ps1/irq_guard.cpp
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
     uint32_t now = gpu.getFrameCount();
@@ -80,6 +81,7 @@ class RSDKv3PS1App final : public psyqo::Application {
     void start() override {
         m_cdrom.resetBlocking(gpu());
         g_ps1CDRom = &m_cdrom;
+        PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (ps1/irq_guard.hh)
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
 #ifdef PS1_BOOT_FOLDER

@@ -18,4 +18,5 @@ bool PS1FmvActive(); // a video is open (audio: the CD input carries its XA)
 extern volatile uint32_t g_ps1FmvPlays;   // videos opened
 extern volatile uint32_t g_ps1FmvFails;   // requests that couldn't open (missing file / heap)
 extern volatile uint32_t g_ps1FmvFrames;  // game frames in video mode
-extern volatile uint32_t g_ps1FmvSkipped; // videos ended by a button
+extern volatile uint32_t g_ps1FmvSkipped;  // videos ended by a button
+extern volatile uint32_t g_ps1FmvTimeouts; // videos closed by the length watchdog

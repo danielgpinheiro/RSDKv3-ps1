@@ -260,6 +260,39 @@ void PS1RenderBeginFrame(psyqo::GPU &gpu)
 // FMV frames (ps1/fmv.cpp): 0 = black, 1 = a new picture was just written into the other buffer (the one
 // shown after this frame's flip): it is copied into this frame's buffer too, so both hold it; 2 = no new
 // picture: the displayed frame is copied over (the skip fade darkens it a step further each frame).
+// Rows the FMV frame leaves alone: the diagnostics strip (ps1/fmv.cpp) uploaded into both buffers, in up
+// to two bands (bottom and top letterbox).
+static int s_fmvKeep[2][2] = {{0, 0}, {0, 0}};
+void PS1RenderFmvKeepRows(int y0, int y1, int y2, int y3)
+{
+    s_fmvKeep[0][0] = y0;
+    s_fmvKeep[0][1] = y1;
+    s_fmvKeep[1][0] = y2;
+    s_fmvKeep[1][1] = y3;
+}
+
+// Fill (copy = false) or copy from the last frame the lines [y0, y1) minus the kept bands.
+static void fmvLines(int y0, int y1, bool copy, int band = 0)
+{
+    if (y0 >= y1)
+        return;
+    if (band == 2) {
+        if (copy)
+            PS1ChainCopyLastFrameLines(y0, y1);
+        else
+            PS1ChainFillLines(y0, y1, 0, 0, 0);
+        return;
+    }
+    int k0 = s_fmvKeep[band][0] > y0 ? s_fmvKeep[band][0] : y0;
+    int k1 = s_fmvKeep[band][1] < y1 ? s_fmvKeep[band][1] : y1;
+    if (k0 >= k1) { // this band doesn't cut [y0, y1)
+        fmvLines(y0, y1, copy, band + 1);
+        return;
+    }
+    fmvLines(y0, k0, copy, band + 1);
+    fmvLines(k1, y1, copy, band + 1);
+}
+
 void PS1RenderFmvFrame(int mode)
 {
     if (s_frameOpen || !s_chainOpen)
@@ -267,13 +300,13 @@ void PS1RenderFmvFrame(int mode)
     s_frameOpen = true;
     s_fmvFrame  = true;
     if (mode == 1) {
-        PS1ChainFillLines(0, 32, 0, 0, 0);
-        PS1ChainCopyLastFrameLines(32, 208);
-        PS1ChainFillLines(208, SCREEN_YSIZE, 0, 0, 0);
+        fmvLines(0, 32, false);
+        fmvLines(32, 208, true);
+        fmvLines(208, SCREEN_YSIZE, false);
     } else if (mode == 2) {
-        PS1ChainCopyLastFrameLines(0, SCREEN_YSIZE);
+        fmvLines(0, SCREEN_YSIZE, true);
     } else {
-        PS1ChainFillLines(0, SCREEN_YSIZE, 0, 0, 0);
+        fmvLines(0, SCREEN_YSIZE, false);
     }
 }
 
