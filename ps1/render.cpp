@@ -75,6 +75,8 @@ volatile uint32_t g_ps1LayerPrims     = 0; // tile-layer primitives chained this
 volatile uint32_t g_ps1LayerHbl       = 0; // CPU time of this frame's tile layers (hblanks)
 volatile uint32_t g_ps1StripBandCount = 0; // strip bands drawn this frame (profiling)
 volatile uint32_t g_ps1TileBandCount  = 0; // tile bands drawn this frame (profiling)
+volatile uint32_t g_ps1ProfObjDrawHbl = 0; // this frame: object draw subs (script VM + their Draw* calls)
+volatile uint32_t g_ps1ProfFloorsHbl  = 0; // this frame: every 3D floor / sky layer
 volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
 volatile uint32_t g_ps1ProfSlot[4]    = {}; // this frame: hblanks per draw slot (layerID 0-3)
 volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped / partial quads or sprites (slow path)
@@ -218,6 +220,8 @@ static void PS1FrameStart(bool clear)
     g_ps1LayerPrims  = 0;
     g_ps1LayerHbl    = 0;
     for (int i = 0; i < 5; ++i) g_ps1ProfLayer[i] = 0;
+    g_ps1ProfObjDrawHbl = 0;
+    g_ps1ProfFloorsHbl  = 0;
     for (int i = 0; i < 4; ++i) g_ps1ProfSlot[i] = 0;
     g_ps1TileFlipped = 0;
     g_ps1StripBandCount = 0;
@@ -723,6 +727,7 @@ void ClearScreen(byte index)
 void DrawObjectList(int layer)
 {
     PS1FrameStart(false);
+    uint32_t t0 = PS1Hblanks();
     g_ps1ChainSkipPrims = PS1ObjectsHidden();
     int size            = drawListEntries[layer].listSize;
     for (int i = 0; i < size; ++i) {
@@ -735,6 +740,7 @@ void DrawObjectList(int layer)
         }
     }
     g_ps1ChainSkipPrims = false;
+    g_ps1ProfObjDrawHbl = g_ps1ProfObjDrawHbl + PS1HblanksSince(t0);
 }
 
 void DrawHLineScrollLayer(int layerID);
@@ -2183,7 +2189,14 @@ static void PS1Draw3DFloor(int layerID)
             project(cur, (tz + 1) << 4, ua, ub);
             const ushort *chunkRow = &layer->tiles[(tz >> 3) << 8];
             int te = tb + 1 - gx0 > PS1_FLOOR_GRID - 1 ? gx0 + PS1_FLOOR_GRID - 2 : tb;
-            for (int tx = ta; tx <= te && quads < PS1_FLOOR_MAX_QUADS; ++tx) {
+            if (te - ta + 1 > PS1_FLOOR_MAX_QUADS - quads)
+                te = ta + PS1_FLOOR_MAX_QUADS - quads - 1;
+            // The row's quads go straight into the arena, one fragment each, linked once (PS1ChainBulkBegin).
+            uint32_t *q = nullptr;
+            if (te >= ta && !(q = PS1ChainBulkBegin(te - ta + 1, 9)))
+                break; // the arena is full
+            int rowQuads = 0;
+            for (int tx = ta; tx <= te; ++tx) {
                 ++cand;
                 uint32_t A = prev[tx - gx0], B = prev[tx - gx0 + 1], C = cur[tx - gx0], D = cur[tx - gx0 + 1];
                 if (A == 0x7FFF || B == 0x7FFF || C == 0x7FFF || D == 0x7FFF)
@@ -2207,9 +2220,6 @@ static void PS1Draw3DFloor(int layerID)
                 if (dir & FLIP_Y)
                     vT = v + 15, vB = v;
                 uint32_t tpage = (uint32_t)((PS1_TILE_PAGE_X + 2 * (page & 1)) | ((PS1_TILE_PAGE_Y + (page >> 1)) << 4) | (1 << 7));
-                uint32_t *q = PS1ChainRawBegin(9);
-                if (!q)
-                    break;
                 q[0] = 0x2C808080;
                 q[1] = A;
                 q[2] = s_tileClutWord | ((uint32_t)vT << 8) | (uint32_t)uL;
@@ -2219,9 +2229,12 @@ static void PS1Draw3DFloor(int layerID)
                 q[6] = ((uint32_t)vB << 8) | (uint32_t)uL;
                 q[7] = D;
                 q[8] = ((uint32_t)vB << 8) | (uint32_t)uR;
-                PS1ChainRawEnd();
-                ++quads;
+                q += 10;
+                ++rowQuads;
             }
+            if (q)
+                PS1ChainBulkEnd(rowQuads);
+            quads += rowQuads;
             uint32_t *tmp = prev;
             prev          = cur;
             cur           = tmp;
@@ -2232,5 +2245,6 @@ static void PS1Draw3DFloor(int layerID)
     PS1ChainDrawAreaReset();
     g_ps1FloorQuads = quads;
     g_ps1FloorHbl   = PS1HblanksSince(t0);
+    g_ps1ProfFloorsHbl = g_ps1ProfFloorsHbl + g_ps1FloorHbl;
 }
 

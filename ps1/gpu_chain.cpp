@@ -405,6 +405,44 @@ void PS1ChainRawEnd() {
     s_tpageValid = false;
 }
 
+static uint32_t *s_bulk = nullptr;
+static int s_bulkWpp = 0;
+// A bulk primitive as psyqo's chain(first, last) sees it: the DMA header word, then the words.
+struct BulkFrag {
+    uintptr_t head;
+    size_t getActualFragmentSize() const { return (size_t)s_bulkWpp; }
+};
+
+uint32_t *PS1ChainBulkBegin(int n, int wpp) {
+    s_bulk = nullptr;
+    if (g_ps1ChainSkipPrims || n <= 0 || wpp <= 0 || wpp > PS1_CHAIN_MAX_WORDS)
+        return nullptr;
+    runHook();
+    flushBatch();
+    if (!s_cur || s_cur + n * (wpp + 1) > s_end) {
+        g_ps1ChainOverflow = g_ps1ChainOverflow + 1;
+        return nullptr;
+    }
+    s_bulk    = s_cur;
+    s_bulkWpp = wpp;
+    return s_cur + 1;
+}
+
+void PS1ChainBulkEnd(int used) {
+    if (!s_bulk || used <= 0) {
+        s_bulk = nullptr;
+        return;
+    }
+    uint32_t stride = (uint32_t)s_bulkWpp + 1, size = (uint32_t)s_bulkWpp << 24;
+    uint32_t *h = s_bulk;
+    for (int k = 0; k < used - 1; ++k, h += stride) // DMA linked-list headers: size << 24 | next packet address
+        *h = size | (reinterpret_cast<uintptr_t>(h + stride) & 0xffffff);
+    s_gpu->chain(reinterpret_cast<BulkFrag *>(s_bulk), reinterpret_cast<BulkFrag *>(h));
+    s_cur        = s_bulk + used * stride;
+    s_bulk       = nullptr;
+    s_tpageValid = false;
+}
+
 void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n) {
     if (g_ps1ChainSkipPrims || n <= 0 || wpp <= 0 || wpp > PS1_CHAIN_MAX_WORDS)
         return;

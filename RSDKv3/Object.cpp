@@ -63,6 +63,12 @@ void ProcessObjects()
         bool active = false;
         int x = 0, y = 0;
         Entity *entity = &objectEntityList[objectLoop];
+#if RETRO_PLATFORM == RETRO_PS1
+        // A blank slot does nothing below (the priority switch only decides whether a typed object runs;
+        // BOUNDS_DESTROY would blank it again): skipping it saves ~50 hblanks a frame over 1,056 slots.
+        if (entity->type == OBJ_TYPE_BLANKOBJECT)
+            continue;
+#endif
         switch (entity->priority) {
             case PRIORITY_BOUNDS:
                 x      = entity->XPos >> 16;

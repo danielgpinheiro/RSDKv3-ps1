@@ -71,6 +71,11 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n);
 uint32_t *PS1ChainRawBegin(int words);
 void PS1ChainRawEnd();
 void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n);
+// Up to n primitives of wpp (<= 14) words, one fragment each, written straight into the arena and linked
+// with a single chain() call: PS1ChainBulkBegin returns where primitive 0's words go (primitive k at
+// + k * (wpp + 1)), nullptr if the arena is full; PS1ChainBulkEnd(used) links the first `used` of them.
+uint32_t *PS1ChainBulkBegin(int n, int wpp);
+void PS1ChainBulkEnd(int used);
 void PS1ChainSprite(const psyqo::Prim::Sprite &s);
 void PS1ChainQuad(const psyqo::Prim::TexturedQuad &q);         // note: quads carry their own texpage
 void PS1ChainRect(const psyqo::Prim::Rectangle &r);            // untextured; semi-trans uses the current texpage mode
