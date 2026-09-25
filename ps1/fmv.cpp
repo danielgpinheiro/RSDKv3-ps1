@@ -91,7 +91,10 @@ int PS1FmvUpdate(bool skip) {
     }
     int r = 0;
     if (!s_skipped)
-        r = PS1VideoDecodeTo(PS1Hblanks(), 0, PS1ChainBufferY() + FMV_Y);
+        // Into the buffer shown after this frame's flip: psyqo sends the chain after flip(), so during the
+        // frame PS1ChainBufferY() is the buffer on screen (an upload there showed the new picture, then the
+        // old one for a frame). The frame's chain copies it into its own buffer (PS1RenderFmvFrame mode 1).
+        r = PS1VideoDecodeTo(PS1Hblanks(), 0, (256 - PS1ChainBufferY()) + FMV_Y);
     if (r > 0)
         s_picture = true;
     PS1RenderFmvFrame(r > 0 ? 1 : s_picture ? 2 : 0);

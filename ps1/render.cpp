@@ -226,8 +226,9 @@ void PS1RenderBeginFrame(psyqo::GPU &gpu)
     s_fmvFrame  = false;
 }
 
-// FMV frames (ps1/fmv.cpp): 0 = black, 1 = a new picture was just written into this frame's buffer
-// (only the letterbox bars are filled), 2 = no new picture: the displayed frame is copied over.
+// FMV frames (ps1/fmv.cpp): 0 = black, 1 = a new picture was just written into the other buffer (the one
+// shown after this frame's flip): it is copied into this frame's buffer too, so both hold it; 2 = no new
+// picture: the displayed frame is copied over (the skip fade darkens it a step further each frame).
 void PS1RenderFmvFrame(int mode)
 {
     if (s_frameOpen || !s_chainOpen)
@@ -236,6 +237,7 @@ void PS1RenderFmvFrame(int mode)
     s_fmvFrame  = true;
     if (mode == 1) {
         PS1ChainFillLines(0, 32, 0, 0, 0);
+        PS1ChainCopyLastFrameLines(32, 208);
         PS1ChainFillLines(208, SCREEN_YSIZE, 0, 0, 0);
     } else if (mode == 2) {
         PS1ChainCopyLastFrameLines(0, SCREEN_YSIZE);
