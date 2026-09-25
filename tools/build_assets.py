@@ -10,13 +10,14 @@ Steps (golden rule: nothing is decoded at runtime; every converter checks its ow
   6. sfx      tools/audio/build_sfx.py -> Data/SoundFX/**/*.vag (SPU-ADPCM, one rate per file) +
               Data/Stages/Secrets/SFX/ (its own lower-rate copies), Data/Game/PS1SfxStages.bin
   7. music    tools/audio/build_music.py -> Data/Music/Music.xa + Music.bin (CD-XA, 68 tracks, 8 channels)
+  8. video    tools/fmv/build_str.py videos/*.ogv -> Data/Videos/<Name>.str + .sti (MDEC STR, JP + US XA audio)
 The PC source files stay in the tree (.gif .wav .ogg); tools/disc/build_disc.py leaves them off the
-disc. Phase 6 adds video (STR).
+disc.
 
 Output: OUT/build/iso/Data/** and OUT/build/manifest/ (OUT = the repo by default, so `make disc`
 works on it). Needs: a C++17 compiler (CXX), Python with Pillow + numpy.
 
-Usage: build_assets.py (--rsdk PATH/Data.rsdk | --data PATH/Data) [--out DIR] [--lang en|jp]
+Usage: build_assets.py (--rsdk PATH/Data.rsdk | --data PATH/Data) [--videos DIR] [--out DIR] [--lang en|jp]
 """
 import argparse, os, shutil, subprocess, sys
 
@@ -40,6 +41,7 @@ def main():
     src.add_argument('--rsdk', help="Sonic CD's Data.rsdk (Steam)")
     src.add_argument('--data', help='an already extracted Data/ directory')
     ap.add_argument('--out', default=REPO, help='output root (gets build/iso/Data and build/manifest)')
+    ap.add_argument('--videos', help="Sonic CD's videos/*.ogv (default: videos/ next to Data.rsdk or Data/)")
     ap.add_argument('--lang', default='en', choices=('en', 'jp'),
                     help="the disc's language (one disc per language, docs/28 phase 4)")
     a = ap.parse_args()
@@ -91,6 +93,13 @@ def main():
     print('[6 sfx] ' + ' '.join(l for l in r.stdout.splitlines() if l.startswith('sfx ')))
     r = run('7 music', [PY, os.path.join(HERE, 'audio', 'build_music.py'), data], capture_output=True, text=True)
     print('[7 music] ' + ' '.join(l for l in r.stdout.splitlines() if l.startswith('Music.xa')))
+    videos = a.videos or os.path.join(os.path.dirname(os.path.abspath(a.rsdk or a.data.rstrip('/'))), 'videos')
+    if os.path.isdir(videos):
+        r = run('8 video', [PY, os.path.join(HERE, 'fmv', 'build_str.py'), videos, data], capture_output=True, text=True)
+        for l in r.stdout.splitlines():
+            print('[8 video] ' + l)
+    else:
+        print('[8 video] no videos folder (%s): the disc plays no FMV' % videos)
     print('assets ready in %s' % data)
 
 

@@ -31,6 +31,7 @@
 #include "common/syscalls/syscalls.h"
 #include "gpu_chain.hh"
 #include "sprite_atlas.hh"
+#include "fmv.hh"
 #include "tileset.hh"
 #include "video.hh" // PS1Hblanks (profiling)
 
@@ -209,12 +210,48 @@ static void PS1FrameStart(bool clear)
     s_sceneMark = PS1ChainMark();
 }
 
+static bool s_fmvFrame = false; // this frame shows an FMV (ps1/fmv.cpp): FlipScreen leaves it alone
+
 void PS1RenderBeginFrame(psyqo::GPU &gpu)
 {
     PS1ChainBegin(gpu);
     PS1AtlasServicePictures(); // on-demand pictures the last frame asked for (nothing chained yet)
+    PS1FmvBeginFrame();        // FMV open / close (swaps the chain arenas: nothing chained yet)
     s_chainOpen = true;
     s_frameOpen = false;
+    s_fmvFrame  = false;
+}
+
+// FMV frames (ps1/fmv.cpp): 0 = black, 1 = a new picture was just written into this frame's buffer
+// (only the letterbox bars are filled), 2 = no new picture: the displayed frame is copied over.
+void PS1RenderFmvFrame(int mode)
+{
+    if (s_frameOpen || !s_chainOpen)
+        return;
+    s_frameOpen = true;
+    s_fmvFrame  = true;
+    if (mode == 1) {
+        PS1ChainFillLines(0, 32, 0, 0, 0);
+        PS1ChainFillLines(208, SCREEN_YSIZE, 0, 0, 0);
+    } else if (mode == 2) {
+        PS1ChainCopyLastFrameLines(0, SCREEN_YSIZE);
+    } else {
+        PS1ChainFillLines(0, SCREEN_YSIZE, 0, 0, 0);
+    }
+}
+
+// FMV skip fade (upstream ProcessVideo: fadeMode += 8 per frame): the frame, a copy of the last one, is
+// darkened by step / 255 with subtractive blending, so 32 frames reach black.
+void PS1RenderFmvFade(int step)
+{
+    psyqo::Prim::Rectangle r(psyqo::Color{ { .r = (uint8_t)step, .g = (uint8_t)step, .b = (uint8_t)step } });
+    r.position = psyqo::Vertex{ { .x = 0, .y = 0 } };
+    r.size     = psyqo::Vertex{ { .w = (int16_t)SCREEN_XSIZE, .h = SCREEN_YSIZE } };
+    psyqo::PrimPieces::TPageAttr attr; // untextured semi-transparency takes its mode from the texpage
+    attr.set(psyqo::Prim::TPageAttr::SemiTrans::FullBackSubFullFront);
+    PS1ChainTPage(attr);
+    r.setSemiTrans();
+    PS1ChainRect(r);
 }
 
 void PS1RenderEndFrame()
@@ -522,7 +559,7 @@ static void PS1DrawBankRegions(psyqo::Color clear)
 // palette as it is now (a SetFade / palette change from a draw sub shows in the same frame).
 void FlipScreen()
 {
-    if (!s_frameOpen)
+    if (!s_frameOpen || s_fmvFrame)
         return;
     PS1ChainSetHook(nullptr); // nothing else comes: a pending fade stays a CLUT fade (the hook would draw it)
     psyqo::Color clear = { { .r = 0, .g = 0, .b = 0 } };

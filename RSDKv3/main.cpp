@@ -36,6 +36,7 @@ psyqo::AdvancedPad *g_ps1Pad    = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom  = nullptr;
 
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
+void PS1VideoTestService();                 // RSDKv3/Video.cpp (GDB test hook)
 void PS1RenderEndFrame();
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
@@ -95,6 +96,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         uint32_t t0 = PS1Hblanks();
         PS1AudioUpdate();     // frees SFX channels whose sample ended (before the scripts run), music volume
         PS1SpuDebugService();
+        PS1VideoTestService(); // GDB: g_ps1VideoTestPlay
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();

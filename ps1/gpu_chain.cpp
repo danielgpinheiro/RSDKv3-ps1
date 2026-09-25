@@ -67,7 +67,8 @@ struct VarFragment {
     size_t getActualFragmentSize() const { return words; }
 };
 
-uint32_t *s_arenaMem = nullptr; // 2 x PS1_CHAIN_ARENA_WORDS (heap), nullptr while suspended
+uint32_t *s_arenaMem = nullptr; // 2 x s_arenaWords (heap), nullptr while suspended
+uint32_t s_arenaWords = PS1_CHAIN_ARENA_WORDS; // per parity; smaller while an FMV plays (PS1ChainSetArenaWords)
 void (*s_hook)() = nullptr;
 
 inline void runHook() {
@@ -142,7 +143,7 @@ static bool s_suspended = false;
 void PS1ChainBegin(psyqo::GPU &gpu) {
     s_gpu = &gpu;
     if (!s_arenaMem && !s_suspended)
-        s_arenaMem = (uint32_t *)psyqo_malloc(2 * PS1_CHAIN_ARENA_WORDS * 4);
+        s_arenaMem = (uint32_t *)psyqo_malloc(2 * s_arenaWords * 4);
     if (!s_arenaMem) {
         g_ps1ChainArenaFail = g_ps1ChainArenaFail + 1;
         s_base = s_cur = s_end = nullptr;
@@ -150,9 +151,9 @@ void PS1ChainBegin(psyqo::GPU &gpu) {
         s_sbatch = nullptr;
         return;
     }
-    s_base       = s_arenaMem + (gpu.getParity() ? PS1_CHAIN_ARENA_WORDS : 0);
+    s_base       = s_arenaMem + (gpu.getParity() ? s_arenaWords : 0);
     s_cur        = s_base;
-    s_end        = s_base + PS1_CHAIN_ARENA_WORDS;
+    s_end        = s_base + s_arenaWords;
     s_batch      = nullptr;
     s_sbatch     = nullptr;
     s_tpageValid = false;
@@ -181,6 +182,8 @@ void PS1ChainSuspend() {
     s_suspended = true;
     g_ps1ChainSuspends = g_ps1ChainSuspends + 1;
 }
+
+void PS1ChainSetArenaWords(uint32_t words) { s_arenaWords = words ? words : PS1_CHAIN_ARENA_WORDS; }
 
 void PS1ChainResume() {
     if (!s_suspended)
@@ -529,6 +532,8 @@ int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
 static int16_t chainBufferY() { // the buffer this frame's chain draws into (psyqo getNextScissor)
     return s_gpu->getParity() ? 0 : 256;
 }
+
+int PS1ChainBufferY() { return s_gpu ? chainBufferY() : 0; }
 
 void PS1ChainDrawArea(int x0, int y0, int x1, int y1) {
     int16_t by = chainBufferY();

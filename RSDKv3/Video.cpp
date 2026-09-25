@@ -1,8 +1,9 @@
 #include "RetroEngine.hpp"
 
 #if RETRO_PLATFORM == RETRO_PS1
-// PS1 port: no Theora at runtime. The .ogv videos become MDEC/STR streams at build time and play
-// through ps1/video.cpp (docs/28 phase 6); until then the engine sees "no video".
+// PS1 port: no Theora at runtime. The .ogv videos become MDEC STR streams with both soundtracks' audio at
+// build time (tools/fmv/build_str.py) and play full screen through ps1/fmv.cpp (docs/28 phase 6).
+#include "../ps1/fmv.hh"
 int currentVideoFrame = 0;
 int videoFrameCount   = 0;
 int videoWidth        = 0;
@@ -18,9 +19,60 @@ int vidFrameMS    = 0;
 int vidBaseticks  = 0;
 bool videoSkipped = false;
 
-void PlayVideoFile(char *filePath) {}
+static int s_ps1MusicBefore = -1; // track playing when the video started (restarted after it)
+
+void PlayVideoFile(char *filePath)
+{
+    int len = StrLength(filePath);
+    if (len >= 2 && StrComp(filePath + (len - 2), "us")) // as upstream: "<Name>us" -> "<Name>"
+        filePath[len - 2] = 0;
+    // Upstream picks the Theora file's audio track by Options.Soundtrack (0 = JP, 1 = US): the STR carries
+    // both as XA channels.
+    if (!PS1FmvRequest(filePath, GetGlobalVariableByName("Options.Soundtrack")))
+        return;
+    s_ps1MusicBefore = musicStatus == MUSIC_PLAYING || musicStatus == MUSIC_PAUSED ? trackID : -1;
+    videoPlaying     = 1;
+    trackID          = TRACK_COUNT - 1;
+    videoSkipped     = false;
+    Engine.gameMode  = ENGINE_VIDEOWAIT;
+}
+
 void UpdateVideoFrame() {}
-int ProcessVideo() { return 1; } // 1 = finished: ENGINE_VIDEOWAIT returns to the game
+
+// GDB test hook: >= 0 -> the next frame plays that video as a script's LoadVideo would (0 Opening,
+// 1 Pencil_Test, 2 Good_Ending, 3 Bad_Ending); only in normal game mode.
+volatile int32_t g_ps1VideoTestPlay = -1;
+void PS1VideoTestService()
+{
+    static const char *const names[] = { "Opening", "Pencil_Test", "Good_Ending", "Bad_Ending" };
+    if (g_ps1VideoTestPlay >= 0 && g_ps1VideoTestPlay < 4 && Engine.gameMode == ENGINE_MAINGAME) {
+        char name[16];
+        StrCopy(name, names[g_ps1VideoTestPlay]);
+        g_ps1VideoTestPlay = -1;
+        PauseSound();
+        PlayVideoFile(name);
+        ResumeSound();
+    }
+}
+
+int ProcessVideo()
+{
+    if (videoPlaying != 1)
+        return 1;
+    CheckKeyPress(&keyPress, 0xFF);
+    if (anyPress || touches > 0)
+        videoSkipped = true; // upstream: a press fades the video out and ends it
+    if (PS1FmvUpdate(videoSkipped) == 0)
+        return 0;
+    videoPlaying = 0;
+    ResumeSound();
+    // The video had the CD: the music that played before it starts again (the PC kept mixing it).
+    if (musicStatus == MUSIC_PLAYING && s_ps1MusicBefore >= 0 && s_ps1MusicBefore < TRACK_COUNT - 1)
+        PlayMusic(s_ps1MusicBefore);
+    s_ps1MusicBefore = -1;
+    return 1; // video finished
+}
+
 void StopVideoPlayback() {}
 void SetupVideoBuffer(int width, int height) {}
 void CloseVideoBuffer() {}

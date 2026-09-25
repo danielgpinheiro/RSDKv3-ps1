@@ -7,6 +7,7 @@
 #include <psyqo/alloc.h>
 #include "../ps1/spu.hh"
 #include "../ps1/xa_music.hh"
+#include "../ps1/fmv.hh"
 int PS1FsPreloadDir(const char *dir, uint32_t maxSize); // cdrom_fs.cpp
 #endif
 
@@ -149,13 +150,15 @@ void PS1AudioUpdate()
     }
     // Music: PC gain bgmVolume * masterVolume (script fades) on the SPU CD input (0x7FFF = 1.0); a
     // non-looping track that reached its end stops like the PC stream at end of file.
-    if (musicStatus == MUSIC_PLAYING && PS1XaEnded())
+    bool fmv = PS1FmvActive(); // an FMV's XA audio uses the CD input (ps1/fmv.cpp)
+    if (!fmv && musicStatus == MUSIC_PLAYING && PS1XaEnded())
         musicStatus = MUSIC_STOPPED;
     // The engine thinks music plays but the drive isn't streaming it (a file read stopped it and no
     // PlayMusic followed): silence the PC wouldn't have.
-    if (musicStatus == MUSIC_PLAYING && !PS1XaPlaying())
+    if (!fmv && musicStatus == MUSIC_PLAYING && !PS1XaPlaying())
         g_ps1MusicSilentFrames = g_ps1MusicSilentFrames + 1;
-    int cdVol = musicStatus == MUSIC_PLAYING ? 0x7fff * bgmVolume / MAX_VOLUME * masterVolume / MAX_VOLUME : 0;
+    int cdVol = fmv ? 0x7fff * bgmVolume / MAX_VOLUME
+                    : musicStatus == MUSIC_PLAYING ? 0x7fff * bgmVolume / MAX_VOLUME * masterVolume / MAX_VOLUME : 0;
     PS1SpuSetCdVolume((uint16_t)cdVol, (uint16_t)cdVol);
     // PC frees a channel (StopSfx of its sfx) when its sample runs out; on the SPU the voice's envelope
     // drops to 0 at the sample's end block.

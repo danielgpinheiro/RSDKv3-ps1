@@ -1,6 +1,11 @@
 /*
  * PS1 STR video playback (MDEC + VLC).
  *
+ * Sonic CD (docs/28 phase 6): full-screen FMV STRs from tools/fmv/build_str.py (320x176, 7-8 video
+ * sectors per frame, JP + US XA audio channels), described by an 'STR2' sidecar that also sizes the
+ * buffers (max RLE words, max sectors per frame). In direct mode the MDEC output goes column by column
+ * (16 x height) straight into VRAM: no full-frame buffer in RAM.
+ *
  * Streams a psxavenc `-t strv` file (BS v2, 2048-byte sectors, 10 sectors/frame) with
  * the continuous CD reader (cdrom_stream.hh), Huffman-decodes each frame with
  * DecDCTvlcStart2, then the MDEC hardware does RLE+IDCT+YUV->RGB into a 15bpp BGR555
@@ -10,12 +15,16 @@
 #include "video.hh"
 #include "mdec.hh"
 #include "cdrom_stream.hh"
+#include "gpu_chain.hh"
 
 #include <stdio.h>
 #include <string.h>
 
 #include <psyqo/alloc.h>
+#include <psyqo/gpu.hh>
 #include "common/hardware/counters.h"
+
+extern psyqo::GPU *g_ps1GPU;
 
 #define ISO_SECTOR            2048
 #define STR_SECTORS_PER_FRAME 10
@@ -29,6 +38,7 @@
 // frames that would exceed it are skipped (counted in g_ps1VideoRleOverflow).
 #define STR_MAX_RLE_WORDS 0x3800
 #define STR_PIXELS        (256 * 160)
+#define STR_COLUMN        16 // MDEC macroblock column width (direct mode)
 
 volatile uint32_t g_ps1VideoFrames = 0; // frames decoded
 volatile uint32_t g_ps1VideoResync = 0; // sectors skipped because their STR header didn't match
@@ -46,7 +56,7 @@ static FILE *s_str = nullptr;
 
 // All FMV buffers live on the heap only while a video is open (docs/26 B1): ~235 KB that
 // the game doesn't carry after the intro. Allocated largest-first to limit fragmentation.
-static uint16_t   *s_video    = nullptr; // decoded 15bpp BGR555 frame (80 KB)
+static uint16_t   *s_video    = nullptr; // decoded 15bpp BGR555 frame (80 KB); direct mode: one 16-px column
 static uint8_t    *s_ring     = nullptr; // CD read-ahead ring (40 KB)
 static uint32_t   *s_rle      = nullptr; // VLC output: MDEC(1) cmd + RLE halfwords (56 KB)
 static DECDCTTAB  *s_vlcTable = nullptr; // Huffman table (34 KB)
@@ -55,6 +65,10 @@ static VLC_Context s_vlcCtx;
 
 static int s_width = 256;
 static int s_height = 160;
+static uint32_t s_rleWords = STR_MAX_RLE_WORDS; // RLE buffer size (words)
+static uint32_t s_bsBytes  = STR_BS_MAX;        // BS payload buffer size
+static bool s_direct = false;                   // MDEC columns straight to VRAM at (s_dstX, s_dstY)
+static int s_dstX = 0, s_dstY = 0;
 static int s_frameCount = 0;
 static bool s_xa        = false; // STR with interleaved XA audio (sidecar .sti): never pauses, drops unrequested frames
 static int s_nextFrame  = 1; // STR frame numbers are 1-based
@@ -97,28 +111,31 @@ static void freeBuffers() {
 }
 
 static bool allocBuffers() {
-    s_video    = (uint16_t *)psyqo_malloc(STR_PIXELS * sizeof(uint16_t));
+    uint32_t pixels = s_direct ? STR_COLUMN * s_height : STR_PIXELS;
     s_ring     = (uint8_t *)psyqo_malloc(STR_RING_SECTORS * ISO_SECTOR);
-    s_rle      = (uint32_t *)psyqo_malloc(STR_MAX_RLE_WORDS * sizeof(uint32_t));
+    s_rle      = (uint32_t *)psyqo_malloc(s_rleWords * sizeof(uint32_t));
     s_vlcTable = (DECDCTTAB *)psyqo_malloc(sizeof(DECDCTTAB));
-    s_bs       = (uint8_t *)psyqo_malloc(STR_BS_MAX);
+    s_bs       = (uint8_t *)psyqo_malloc(s_bsBytes);
+    s_video    = (uint16_t *)psyqo_malloc(pixels * sizeof(uint16_t));
     if (!s_video || !s_ring || !s_rle || !s_vlcTable || !s_bs) {
         freeBuffers();
         return false;
     }
-    g_ps1VideoHeapBytes = STR_PIXELS * sizeof(uint16_t) + STR_RING_SECTORS * ISO_SECTOR +
-                          STR_MAX_RLE_WORDS * sizeof(uint32_t) + sizeof(DECDCTTAB) + STR_BS_MAX;
-    memset(s_video, 0, STR_PIXELS * sizeof(uint16_t));
+    g_ps1VideoHeapBytes = pixels * sizeof(uint16_t) + STR_RING_SECTORS * ISO_SECTOR + s_rleWords * sizeof(uint32_t) +
+                          sizeof(DECDCTTAB) + s_bsBytes;
+    memset(s_video, 0, pixels * sizeof(uint16_t));
     DecDCTvlcBuild(s_vlcTable);
     return true;
 }
 
 // Build-time sidecar next to an STR with XA audio (tools/fmv/build_str.py): X.str -> X.sti =
-// 'STRI', u32 frames, u32 video (data) sectors, u8 xa file, u8 xa channel, u8 has audio, u8 0.
+// 'STR2', u32 frames, u32 video (data) sectors, u8 xa file, u8 JP channel, u8 US channel, u8 0,
+// u16 width, u16 height, u16 max RLE words, u16 max sectors of a frame.
 struct StrInfo {
     uint32_t frames = 0, videoSectors = 0;
-    uint8_t xaFile = 0, xaChannel = 0;
+    uint8_t xaFile = 0, xaChannel = 0, xaChannel2 = 0;
     bool audio = false;
+    uint16_t width = 256, height = 160, rleWords = STR_MAX_RLE_WORDS, frameSectors = STR_SECTORS_PER_FRAME;
 };
 static bool readStrInfo(const char *path, StrInfo *info) {
     char sti[96];
@@ -130,8 +147,8 @@ static bool readStrInfo(const char *path, StrInfo *info) {
     FILE *f = fopen(sti, "rb");
     if (!f)
         return false;
-    uint8_t b[16];
-    bool ok = fread(b, 1, 16, f) == 16 && !memcmp(b, "STRI", 4);
+    uint8_t b[24];
+    bool ok = fread(b, 1, 24, f) == 24 && !memcmp(b, "STR2", 4);
     fclose(f);
     if (!ok)
         return false;
@@ -139,15 +156,25 @@ static bool readStrInfo(const char *path, StrInfo *info) {
     info->videoSectors = b[8] | (b[9] << 8) | (b[10] << 16) | ((uint32_t)b[11] << 24);
     info->xaFile       = b[12];
     info->xaChannel    = b[13];
-    info->audio        = b[14] != 0;
-    return true;
+    info->xaChannel2   = b[14];
+    info->audio        = true;
+    info->width        = b[16] | (b[17] << 8);
+    info->height       = b[18] | (b[19] << 8);
+    info->rleWords     = b[20] | (b[21] << 8);
+    info->frameSectors = b[22] | (b[23] << 8);
+    return info->width && info->width <= 320 && info->height && info->height <= 240 && info->frameSectors <= STR_SECTORS_PER_FRAME;
 }
 
 volatile uint32_t g_ps1VideoXa = 0; // 1 while an STR with XA audio streams (GDB)
 
-bool PS1VideoOpen(const char *path) {
+bool PS1VideoOpen(const char *path, int audio) {
     StrInfo info;
     bool hasInfo = readStrInfo(path, &info);
+    s_direct     = hasInfo; // Sonic CD's full-screen STRs: MDEC columns straight to VRAM
+    s_width      = hasInfo ? info.width : 256;
+    s_height     = hasInfo ? info.height : 160;
+    s_rleWords   = hasInfo ? info.rleWords + 16u : STR_MAX_RLE_WORDS;
+    s_bsBytes    = hasInfo ? info.frameSectors * STR_BS_CHUNK : STR_BS_MAX;
     s_str = fopen(path, "rb");
     if (!s_str)
         return false;
@@ -167,11 +194,9 @@ bool PS1VideoOpen(const char *path) {
     s_stage      = STAGE_EMPTY;
     s_pixReady   = false;
     s_rlePos     = 0;
-    // Geometry is fixed by the encoder (psxavenc -s 256x160).
-    s_width  = 256;
-    s_height = 160;
-    if (s_xa) // the intro music: XA sectors interleaved in the STR, played by the drive
-        return PS1StreamOpenXA(s_str->lba, info.videoSectors, s_ring, STR_RING_SECTORS, info.xaFile, info.xaChannel);
+    if (s_xa) // the audio: XA sectors interleaved in the STR, played by the drive (audio 1 = the second channel)
+        return PS1StreamOpenXA(s_str->lba, info.videoSectors, s_ring, STR_RING_SECTORS, info.xaFile,
+                               audio == 1 ? info.xaChannel2 : info.xaChannel);
     return PS1StreamOpen(s_str->lba, sectors, s_ring, STR_RING_SECTORS);
 }
 
@@ -222,7 +247,7 @@ static int fetchFrame() {
     PS1StreamPump();
 
     // RLE size of this frame (BS header mdec0 low 16 bits) + the MDEC(1) command word.
-    if ((((const uint32_t *)s_bs)[0] & 0xffff) + 1 > STR_MAX_RLE_WORDS) {
+    if ((((const uint32_t *)s_bs)[0] & 0xffff) + 1 > s_rleWords) {
         g_ps1VideoRleOverflow = g_ps1VideoRleOverflow + 1;
         s_nextFrame++;
         return 0;
@@ -232,12 +257,27 @@ static int fetchFrame() {
 
 // Hardware decode of s_rle: RLE + IDCT + YUV->RGB into s_video. Synchronous, so a single
 // pixel buffer suffices (the caller uploads it before the next decode).
+volatile uint32_t g_ps1VideoSyncFail = 0, g_ps1VideoColMdecHbl = 0, g_ps1VideoColUpHbl = 0; // (debug: direct mode)
 static void mdecRun() {
     uint32_t t0 = PS1Hblanks();
     // Bit 15 (STP) set on every texel: MDEC's pure black would otherwise be 0x0000 =
     // transparent, and the additive fade overlay would then hit the background twice.
     DecDCTin(s_rle, DECDCT_MODE_16BPP_BIT15);
-    DecDCTout((uint32_t *)s_video, (size_t)(s_width * s_height / 2));
+    if (s_direct) {
+        // The MDEC emits macroblock columns top to bottom: each 16 x height column is contiguous rows.
+        for (int x = 0; x < s_width; x += STR_COLUMN) {
+            uint32_t tc = PS1Hblanks();
+            DecDCTout((uint32_t *)s_video, (size_t)(STR_COLUMN * s_height / 2));
+            if (DecDCToutSync(0) < 0)
+                g_ps1VideoSyncFail = g_ps1VideoSyncFail + 1;
+            g_ps1VideoColMdecHbl = PS1HblanksSince(tc);
+            tc = PS1Hblanks();
+            g_ps1GPU->uploadToVRAM(s_video, psyqo::Rect{{(int16_t)(s_dstX + x), (int16_t)s_dstY}, {STR_COLUMN, (int16_t)s_height}});
+            g_ps1VideoColUpHbl = PS1HblanksSince(tc);
+        }
+    } else {
+        DecDCTout((uint32_t *)s_video, (size_t)(s_width * s_height / 2));
+    }
     DecDCToutSync(0);
     g_ps1VideoMdecHbl = PS1HblanksSince(t0);
     s_nextFrame++;
@@ -415,6 +455,56 @@ int PS1VideoDecode(uint32_t t0) {
     if (spent > g_ps1VideoWorkMaxHbl)
         g_ps1VideoWorkMaxHbl = spent;
     return 0;
+}
+
+// Direct mode (full-screen FMV): the next decoded picture goes to VRAM (x, y) during this call, when
+// its turn comes. 1 = a new picture was written, 0 = not this frame, -1 = end of stream / error.
+volatile uint32_t g_ps1VideoPictures = 0; // pictures written to VRAM (direct mode)
+int PS1VideoDecodeTo(uint32_t t0, int x, int y) {
+    if (!s_str)
+        return -1;
+    s_dstX = x;
+    s_dstY = y;
+    s_requested = 1; // stream-paced: every decoded frame is shown
+    PS1StreamPump();
+    relieveRing();
+    uint32_t before = g_ps1VideoFrames;
+    while (PS1HblanksSince(t0) < WORK_BUDGET_HBL) {
+        if (s_stage == STAGE_EMPTY) {
+            uint32_t tf = PS1Hblanks();
+            int r       = fetchFrame();
+            tf          = PS1HblanksSince(tf);
+            if (tf > g_ps1VideoFetchMaxHbl)
+                g_ps1VideoFetchMaxHbl = tf;
+            if (r < 0)
+                return g_ps1VideoFrames != before ? 1 : -1;
+            if (r == 0)
+                break;
+            s_rlePos = 0;
+            s_vlcAcc = 0;
+            s_stage  = STAGE_VLC;
+        } else if (s_stage == STAGE_VLC) {
+            int r = vlcChunk();
+            if (r < 0)
+                return -1;
+            if (r == 0) {
+                g_ps1VideoVlcHbl = s_vlcAcc;
+                s_stage          = STAGE_MDEC;
+            }
+        } else { // STAGE_MDEC: one picture per game frame, into this frame's draw buffer
+            if (g_ps1VideoFrames != before || PS1HblanksSince(t0) + MDEC_EST_HBL > MDEC_LIMIT_HBL)
+                break;
+            PS1GpuImmediate(); // the previous frame's chain may still be copying from this buffer
+            mdecRun();
+            g_ps1VideoPictures = g_ps1VideoPictures + 1;
+            s_stage = STAGE_EMPTY;
+        }
+    }
+    relieveRing();
+    uint32_t spent = PS1HblanksSince(t0);
+    if (spent > g_ps1VideoWorkMaxHbl)
+        g_ps1VideoWorkMaxHbl = spent;
+    return g_ps1VideoFrames != before ? 1 : 0;
 }
 
 uint16_t *PS1VideoPixels() { return s_video; }
