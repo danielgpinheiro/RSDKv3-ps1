@@ -95,6 +95,73 @@ bool useSGame = false;
 //}
 //#endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+// Memory card saves (docs/28 phase 8, ps1/memcard: Sony file name, CRC-checked header, never formats).
+// Sonic CD's scripts use save RAM well below index 1024 (save slots, options 32-39, time attack from 48:
+// round * 18 + ...): the file holds saveRAM[0..1023] (4 KB, one card block); the rest of the PS1 save RAM
+// is Stage Setup's per-stage scratch (Userdata.hpp). The card is read once, at the first ReadSaveRAM (the save select):
+// from then on the RAM copy is the truth and each WriteSaveRAM writes the whole block (card writes are
+// slow: the loading icon shows if it takes long). No card or an unformatted card: nothing persists (the
+// game never formats a card).
+#include "../ps1/loading.hh"
+#include "../ps1/memcard.hh"
+#include "../ps1/memcard_icons.h"
+#define PS1_SAVE_INTS 1024
+#define PS1_SAVE_FILE "BAHBRW-00003SONICCD" // (psyqo ports are 0-based: Port0 = memory card slot 1)
+volatile uint32_t g_ps1SaveReads = 0, g_ps1SaveWrites = 0;
+volatile int32_t g_ps1SaveLastError = -1; // last psyqo::MemoryCard::Error (0 = OK)
+static int s_ps1SaveState = 0;          // 0 = card not read yet, 1 = read (data), 2 = read (nothing)
+
+bool PS1ReadSaveCard()
+{
+    if (s_ps1SaveState)
+        return s_ps1SaveState == 1;
+    PS1LoadingBegin();
+    uint32_t len = 0;
+    uint16_t version = 0;
+    // Straight into the save RAM: PS1McLoad copies only a CRC-checked payload, so a failed load (no card /
+    // file, bad data) leaves it as the scripts set it.
+    PS1McError e = PS1McLoad(psyqo::MemoryCard::Port::Port0, PS1_SAVE_FILE, saveRAM, PS1_SAVE_INTS * sizeof(int), &len, &version);
+    PS1LoadingEnd();
+    g_ps1SaveLastError = (int32_t)e;
+    g_ps1SaveReads     = g_ps1SaveReads + 1;
+    if (e != PS1McError::OK || version != 1) {
+        s_ps1SaveState = 2;
+        return false;
+    }
+    s_ps1SaveState = 1;
+    return true;
+}
+
+bool PS1WriteSaveCard()
+{
+    PS1LoadingBegin();
+    PS1McError e = PS1McSave(psyqo::MemoryCard::Port::Port0, PS1_SAVE_FILE, "SONIC CD", s_ps1McIconSonicCD, saveRAM,
+                             PS1_SAVE_INTS * sizeof(int), 1);
+    PS1LoadingEnd();
+    g_ps1SaveLastError = (int32_t)e;
+    g_ps1SaveWrites    = g_ps1SaveWrites + 1;
+    if (e != PS1McError::OK)
+        return false;
+    s_ps1SaveState = 1;
+    return true;
+}
+
+// GDB test hook: 1 = WriteSaveRAMData() now; 2 = forget the loaded state and ReadSaveRAMData() now.
+volatile int32_t g_ps1SaveTest = 0;
+void PS1SaveTestService()
+{
+    int t          = g_ps1SaveTest;
+    g_ps1SaveTest  = 0;
+    if (t == 1)
+        WriteSaveRAMData();
+    else if (t == 2) {
+        s_ps1SaveState = 0;
+        ReadSaveRAMData();
+    }
+}
+#endif
+
 bool ReadSaveRAMData()
 {
     useSGame = false;
@@ -144,9 +211,9 @@ bool ReadSaveRAMData()
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-    // No save files on the disc (the memory card comes in docs/28 phase 8): as a missing file on PC. No CD
-    // access either: the menu reads saves while CD-XA music plays (one CD action at a time).
-    return false;
+    // The save RAM lives on the memory card (docs/28 phase 8, PS1ReadSaveCard); never on the disc, which
+    // may be streaming CD-XA music.
+    return PS1ReadSaveCard();
 #endif
     FileIO *saveFile = fOpen(buffer, "rb");
     if (!saveFile) {
@@ -196,7 +263,7 @@ bool ReadSaveRAMData()
 bool WriteSaveRAMData()
 {
 #if RETRO_PLATFORM == RETRO_PS1
-    return true; // docs/28 phase 8 (memory card); never the CD
+    return PS1WriteSaveCard();
 #endif
     char buffer[0x180];
     if (!useSGame) {

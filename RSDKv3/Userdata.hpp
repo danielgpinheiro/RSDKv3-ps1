@@ -8,7 +8,16 @@
 
 #define MOD_COUNT (0x100)
 
+#if RETRO_PLATFORM == RETRO_PS1
+// Sonic CD's scripts use save RAM at 0..~300 (slots, options, time attack: the saved part) and 7168..8191
+// (Stage Setup's per-stage scratch, cleared at every stage start). The PS1 keeps 2048 ints (was 32 KB):
+// indices 0..1023 as they are, 7168..8191 at 1024..2047 (PS1SaveRamIndex); other script accesses read 0 /
+// are dropped and counted (Script.cpp, g_ps1SaveRamOutOfRange). The card file holds 0..1023.
+#define SAVEDATA_SIZE (0x800)
+inline int PS1SaveRamIndex(int i) { return (uint)i < 0x400 ? i : (uint)(i - 0x1C00) < 0x400 ? i - 0x1800 : -1; }
+#else
 #define SAVEDATA_SIZE (0x2000)
+#endif
 
 enum OnlineMenuTypes {
     ONLINEMENU_ACHIEVEMENTS = 0,

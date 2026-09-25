@@ -67,8 +67,10 @@ endif
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)
 CPPFLAGS += -DPS1_MEMCARD_TEST=1
-SRCS += ps1/memcard.cpp ps1/memcard_test.cpp
+SRCS += ps1/memcard_test.cpp
 endif
+# Saves (docs/28 phase 8): Sonic CD's save RAM on the memory card.
+SRCS += ps1/memcard.cpp
 
 # C++20 is the minimum required by psyqo.
 CXXFLAGS = -std=c++20

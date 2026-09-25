@@ -37,6 +37,8 @@ psyqo::CDRomDevice *g_ps1CDRom  = nullptr;
 
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
 void PS1VideoTestService();                 // RSDKv3/Video.cpp (GDB test hook)
+void PS1SaveTestService();                  // RSDKv3/Userdata.cpp (GDB test hook)
+void PS1McPrepare();                        // ps1/memcard.cpp
 void PS1RenderEndFrame();
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
@@ -68,6 +70,7 @@ class RSDKv3PS1App final : public psyqo::Application {
                              .set(psyqo::GPU::MiscSetting::CLEAR_VRAM));
         g_ps1GPU = &gpu();
         m_cdrom.prepare();
+        PS1McPrepare(); // memory card saves (RSDKv3/Userdata.cpp, docs/28 phase 8)
     }
 
     void start() override {
@@ -97,6 +100,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         PS1AudioUpdate();     // frees SFX channels whose sample ended (before the scripts run), music volume
         PS1SpuDebugService();
         PS1VideoTestService(); // GDB: g_ps1VideoTestPlay
+        PS1SaveTestService();  // GDB: g_ps1SaveTest
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();

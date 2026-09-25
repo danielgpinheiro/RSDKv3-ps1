@@ -7,6 +7,7 @@ void PS1TileChanged(int chunkTile); // ps1/render.cpp
 // Scene3D buffers are PS1-sized (Scene3D.hpp): clamp script indices / counts, track the largest
 // seen and count overflows (for GDB; phase 7 sizes them for good).
 volatile uint32_t g_ps1Scene3DOverflow = 0;
+volatile uint32_t g_ps1SaveRamOutOfRange = 0; // SAVERAM accesses past the PS1-sized save RAM (Userdata.hpp)
 volatile uint32_t g_ps1ScriptOverflow  = 0; // LoadBytecode: code / jump table past the PS1-sized arrays
 volatile uint32_t g_ps1ScriptDivZero   = 0; // Div / Mod / Rand by 0 (result 0 instead of a trap)
 volatile uint32_t g_ps1ScriptBadOpcode = 0; // opcode out of range: sub stopped
@@ -2924,7 +2925,18 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     case VAR_ENGINESTATE: scriptEng.operands[i] = Engine.gameMode; break;
                     case VAR_STAGEDEBUGMODE: scriptEng.operands[i] = debugMode; break;
                     case VAR_ENGINEMESSAGE: scriptEng.operands[i] = Engine.message; break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_SAVERAM: { // PS1-sized save RAM (Userdata.hpp)
+                        int k = PS1SaveRamIndex(arrayVal);
+                        if (k >= 0)
+                            scriptEng.operands[i] = saveRAM[k];
+                        else
+                            scriptEng.operands[i] = 0, g_ps1SaveRamOutOfRange = g_ps1SaveRamOutOfRange + 1;
+                        break;
+                    }
+#else
                     case VAR_SAVERAM: scriptEng.operands[i] = saveRAM[arrayVal]; break;
+#endif
                     case VAR_ENGINELANGUAGE: scriptEng.operands[i] = Engine.language; break;
                     case VAR_OBJECTSPRITESHEET: {
                         scriptEng.operands[i] = objectScriptList[objectEntityList[arrayVal].type].spriteSheetID;
@@ -4797,7 +4809,18 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     case VAR_ENGINESTATE: Engine.gameMode = scriptEng.operands[i]; break;
                     case VAR_STAGEDEBUGMODE: debugMode = scriptEng.operands[i]; break;
                     case VAR_ENGINEMESSAGE: break;
+#if RETRO_PLATFORM == RETRO_PS1
+                    case VAR_SAVERAM: {
+                        int k = PS1SaveRamIndex(arrayVal);
+                        if (k >= 0)
+                            saveRAM[k] = scriptEng.operands[i];
+                        else
+                            g_ps1SaveRamOutOfRange = g_ps1SaveRamOutOfRange + 1;
+                        break;
+                    }
+#else
                     case VAR_SAVERAM: saveRAM[arrayVal] = scriptEng.operands[i]; break;
+#endif
                     case VAR_ENGINELANGUAGE: Engine.language = scriptEng.operands[i]; break;
                     case VAR_OBJECTSPRITESHEET: {
                         objectScriptList[objectEntityList[arrayVal].type].spriteSheetID = scriptEng.operands[i];
