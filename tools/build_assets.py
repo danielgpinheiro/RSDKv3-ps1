@@ -59,6 +59,9 @@ def main():
         print('[1 data] copy %s' % a.data, flush=True)
         shutil.copytree(a.data, os.path.join(iso, 'Data'), ignore=shutil.ignore_patterns('.DS_Store'))
     data = os.path.join(iso, 'Data')
+    # PS1 edits to the script bytecode (Help & Options without HOW TO PLAY / CONTROLS: docs/28).
+    r = run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'patch_bytecode.py'), data], capture_output=True, text=True)
+    print('[1 scripts] ' + r.stdout.strip())
 
     cxx = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('g++') or 'c++'
     run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + cxx])

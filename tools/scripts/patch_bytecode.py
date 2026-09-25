@@ -1,0 +1,174 @@
+#!/usr/bin/python3
+"""PS1 edits to Sonic CD's script bytecode, applied to the disc tree at build time (docs/28, user test
+fixes 2026-09-25). The engine runs the scripts unchanged; only their data changes here.
+
+Help & Options (user decision 2026-09-25: no HOW TO PLAY, no CONTROLS). The PC build's HELP & OPTIONS
+button (Menu Button, PS001.bin) opens `Options Menu C`: HOW TO PLAY / CONTROLS / SETTINGS / STAFF
+CREDITS, whose entries call native PC dialogs through engine callbacks. The stage also carries the
+console version, `Options Menu`: INSTRUCTIONS / SETTINGS / STAFF CREDITS / ABOUT, all in-script (its
+SETTINGS window sets music / SFX volume and the spin dash style; INSTRUCTIONS loads the Help stage). On
+PS1 the button opens `Options Menu`, without INSTRUCTIONS:
+  - Menu Button: ResetObjectEntity 62, <Options Menu C> -> <Options Menu>;
+  - Options Menu main: cursor wraps over 3 entries (the constants 3 -> 2); the switches on the entry
+    (OBJECTVALUE1: music stop, the entry's action, the stage it loads) see entry k + 1 of the original;
+  - its entry labels (sprite frames 10-13, highlighted 14-17) move up one, so entry k shows label k + 1;
+  - draw: the 4th entry slot is moved off screen (its `Add OBJECTYPOS, 40` -> -1000).
+Every edit is found by its instruction pattern and checked (count and operands); anything unexpected
+stops the build. Already patched files are recognised and left alone.
+
+Usage: patch_bytecode.py DATA_DIR
+"""
+import os, struct, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, '..'))
+import bytecode_scan as bs  # noqa: E402
+import bytecode_dis as bd  # noqa: E402
+
+
+def rstr(b, i):
+    n = b[i]
+    return b[i + 1:i + 1 + n].decode('latin1'), i + 1 + n
+
+
+def object_index(data, stage, name):
+    b = open(os.path.join(data, 'Stages', stage, 'StageConfig.bin'), 'rb').read()
+    i = 1 + 96
+    n = b[i]
+    i += 1
+    names = []
+    for _ in range(n):
+        s, i = rstr(b, i)
+        names.append(s)
+    return names.index(name), names
+
+
+def encode(values):
+    """RSDKv3 bytecode block encoding (LoadBytecode): header h, n = h & 0x7F values, 4 bytes each if
+    h >= 0x80 else 1 byte each (0..255)."""
+    out = bytearray(struct.pack('<I', len(values)))
+    i = 0
+    while i < len(values):
+        small = 0 <= values[i] <= 255
+        j = i
+        while j < len(values) and j - i < 127 and (0 <= values[j] <= 255) == small:
+            j += 1
+        out.append(j - i if small else 0x80 | (j - i))
+        for v in values[i:j]:
+            out += bytes([v]) if small else struct.pack('<i', v)
+        i = j
+    return bytes(out)
+
+
+def instructions(code, start, names, vars_):
+    """(position, name, operands) from `start` to the sub's End; operand = (kind, value, position of
+    the value): kind 'var' (value = (name, array flag)), 'int' or 'str'."""
+    out, p = [], start
+    while p < len(code):
+        at, op = p, code[p]
+        p += 1
+        name, size = names[op]
+        ops = []
+        for _ in range(size):
+            t = code[p]
+            p += 1
+            if t == 1:
+                arr = code[p]
+                p += 1
+                if arr in (1, 2, 3):
+                    p += 2
+                ops.append(('var', (vars_[code[p]].replace('VAR_', ''), arr), p))
+                p += 1
+            elif t == 2:
+                ops.append(('int', code[p], p))
+                p += 1
+            else:
+                p += code[p] // 4 + 2
+                ops.append(('str', None, p))
+        out.append((at, name, ops))
+        if name in ('End', 'EndFunction'):
+            break
+    return out
+
+
+def one(items, what):
+    if len(items) != 1:
+        sys.exit('ERROR patch_bytecode: expected one %s, found %d' % (what, len(items)))
+    return items[0]
+
+
+def patch_options(data):
+    names, vars_ = bs.tables()
+    path = os.path.join(data, 'Scripts', 'ByteCode', 'PS001.bin')  # presentation stage 1 = Menu
+    raw = open(path, 'rb').read()
+    code, p = bs.blocks(raw, 0)
+    jt, p2 = bs.blocks(raw, p)
+    tail = raw[p2:]
+    button, objs = object_index(data, 'Menu', 'Menu Button')
+    opts, _ = object_index(data, 'Menu', 'Options Menu')
+    optsc, _ = object_index(data, 'Menu', 'Options Menu C')
+    type_opts, type_optsc = opts + 1, optsc + 1  # object types: 0 = none, then the stage's objects (no globals)
+    subs = bs.subs(path)
+    _, jptrs = bd.jump_tables(path)
+
+    # Menu Button: HELP & OPTIONS opens Options Menu.
+    bmain = instructions(code, subs[button][0], names, vars_)
+    reset = [i for i in bmain if i[1] == 'ResetObjectEntity' and [o[1] for o in i[2][:2]] in ([62, type_optsc], [62, type_opts])]
+    at, _, ops = one(reset, 'ResetObjectEntity 62, <options>')
+    if ops[1][1] == type_opts:
+        return 'already patched'
+    code[ops[1][2]] = type_opts
+
+    main = instructions(code, subs[opts][0], names, vars_)
+    v1 = ('OBJECTVALUE1', 0)
+    # Cursor wrap: IfLower .., VALUE1, 0 / Equal VALUE1, 3  and  IfGreater .., VALUE1, 3 / Equal VALUE1, 0.
+    low = [main[k + 1] for k in range(len(main) - 1) if main[k][1] == 'IfLower' and main[k][2][1][1] == v1 and main[k][2][2][1] == 0
+           and main[k + 1][1] == 'Equal' and main[k + 1][2][0][1] == v1]
+    _, _, ops = one(low, 'cursor wrap up')
+    assert ops[1][1] == 3, ops
+    code[ops[1][2]] = 2
+    high = [main[k] for k in range(len(main) - 1) if main[k][1] == 'IfGreater' and main[k][2][1][1] == v1
+            and main[k + 1][1] == 'Equal' and main[k + 1][2][0][1] == v1 and main[k + 1][2][1][1] == 0]
+    _, _, ops = one(high, 'cursor wrap down')
+    assert ops[2][1] == 3, ops
+    code[ops[2][2]] = 2
+    # Switches on the entry: entry k does what entry k + 1 did.
+    sw = [i for i in main if i[1] == 'switch' and i[2][1][0] == 'var' and i[2][1][1] == v1]
+    if len(sw) != 3:
+        sys.exit('ERROR patch_bytecode: expected 3 switches on OBJECTVALUE1, found %d' % len(sw))
+    for _, _, ops in sw:
+        j = jptrs[opts][0] + ops[0][1]
+        lo, hi, dflt = jt[j], jt[j + 1], jt[j + 2]
+        assert (lo, hi) == (0, 3), (lo, hi)
+        jt[j + 4:j + 8] = jt[j + 5:j + 8] + [dflt]
+    # Labels: frames 10-13 and 14-17 (the startup's SpriteFrame list) move up one.
+    frames = [i for i in instructions(code, subs[opts][3], names, vars_) if i[1] == 'SpriteFrame']
+    assert len(frames) >= 18, len(frames)
+    for base in (10, 14):
+        vals = [[o[1] for o in frames[base + k][2]] for k in range(4)]
+        for k in range(4):
+            for o, v in zip(frames[base + k][2], vals[min(k + 1, 3)]):
+                code[o[2]] = v
+    # Draw: the 4th slot off screen.
+    draw = instructions(code, subs[opts][2], names, vars_)
+    adds = [i for i in draw if i[1] == 'Add' and i[2][0][1] == ('OBJECTYPOS', 0) and i[2][1][1] == 40]
+    calls = [k for k, i in enumerate(draw) if i[1] == 'CallFunction']
+    if len(adds) < 3 or len(calls) < 4:
+        sys.exit('ERROR patch_bytecode: Options Menu draw has %d slot steps, %d entry draws' % (len(adds), len(calls)))
+    code[adds[2][2][1][2]] = -1000
+
+    open(path, 'wb').write(encode(code) + encode(jt) + tail)
+    back = open(path, 'rb').read()
+    c2, q = bs.blocks(back, 0)
+    j2, q2 = bs.blocks(back, q)
+    assert c2 == code and j2 == jt and back[q2:] == tail
+    return 'HELP & OPTIONS -> %s (type %d, was %d): SETTINGS / STAFF CREDITS / ABOUT' % (objs[opts], type_opts, type_optsc)
+
+
+def main():
+    data = sys.argv[1]
+    print('PS001.bin: ' + patch_options(data))
+
+
+if __name__ == '__main__':
+    main()
