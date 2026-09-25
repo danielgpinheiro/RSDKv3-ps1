@@ -115,6 +115,14 @@ def font_rects(data, path, chars=None):
     return out
 
 
+def whole_texture(im):
+    H, W = im.shape
+    if H * W <= 256 * 256:
+        return True
+    return H <= 512 and W <= 512 and all(len(set(np.unique(im[y:y + PAGE, x:x + PAGE]).tolist()) - {0}) <= 15
+                                         for y in range(0, H, PAGE) for x in range(0, W, PAGE))
+
+
 def manifest_frames(data, path, images):
     """{sheet path: set of (x, y, w, h)} for one stage manifest (all its `stage` blocks)."""
     frames, sheets = {}, {}
@@ -170,10 +178,11 @@ def manifest_frames(data, path, images):
             if t[2].lower() not in prescaled:  # pre-scaled glyphs replace the original ones
                 for r in fontglyphs.get(t[2].lower(), ()):
                     add_frame(int(t[1]), *r)
-            # A 3D object's texture-sized sheet (<= 256x256, e.g. the title's clouds): all of it. Big sheets
-            # (the menu's) rely on their frames; faces outside the atlas are counted at runtime
-            # (g_ps1FaceTexMiss).
-            if t[2].lower() in whole3d and size(t[2]) is not None and size(t[2])[0] * size(t[2])[1] <= 256 * 256:
+            # A 3D object's texture sheet: all of it when it is texture-sized (<= 256x256, e.g. the title's
+            # clouds) or a <= 512x512 texture cheap in VRAM (every 256x256 quarter 4-bit: SS1's animated
+            # background SSBG1). Big sheets (the menu's) rely on their frames; faces outside the atlas are
+            # counted at runtime (g_ps1FaceTexMiss).
+            if t[2].lower() in whole3d and size(t[2]) is not None and whole_texture(images[t[2]]):
                 H, W = size(t[2])
                 frames.setdefault(t[2], set()).add((0, 0, W, H))
         elif t[0] == 'frame':
@@ -234,6 +243,16 @@ class Bin:
         return best
 
 
+def last_tile(data, stage):
+    """Highest non-empty tile of the stage's 16x16Tiles.gif (-1: none)."""
+    f = os.path.join(data, 'Stages', stage, '16x16Tiles.gif')
+    if not os.path.exists(f):
+        return 1023
+    a = np.array(Image.open(f))
+    used = [t for t in range(a.shape[0] // 16) if a[t * 16:t * 16 + 16].any()]
+    return max(used) if used else -1
+
+
 def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
     """virtual > 0 (feasibility): that many extra 64-halfword columns beyond real VRAM, per page row.
     stream > 0: the `stream` largest merged rects become on-demand pictures (<Stage>.pic)."""
@@ -289,6 +308,12 @@ def build_stage(data, manifest, name, cols_limit=None, virtual=0, stream=0):
     vcols = [100 + i for i in range(virtual)]
     pairs = PAIRS + [(vcols[i], vcols[i + 1]) for i in range(0, len(vcols) - 1, 2)]
     free = [(c, py) for py in (0, 1) for c in COLUMNS + vcols]
+    # Special stages (docs/28 phase 7): a tile page their tile set leaves empty joins the atlas, last (page 3
+    # is the far floor's): SS1's animated 3D background needs 4 more columns than the sprite area has.
+    if re.match(r'SS\d+$', name):
+        if last_tile(data, name) < 512:
+            free += [(9, 1), (10, 1)]
+            pairs = pairs + [(9, 10)]
     if video:
         free = [cp for cp in free if cp not in FMV_RESERVED]
     if pictures:
