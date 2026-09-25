@@ -53,7 +53,7 @@ def file_type(path):
     return 'data'
 
 
-ORDER = os.path.join(HERE, 'load_order.txt')
+ORDER = os.environ.get('PS1_LOAD_ORDER') or os.path.join(HERE, 'load_order.txt')  # the public builder: its work folder
 SOURCE_ONLY = ('.gif', '.wav', '.ogg')
 # Fixed timestamps (volume + every entry): the image depends only on its contents, so identical
 # inputs give a byte-identical disc (published SHA-256s can be checked).
@@ -137,6 +137,21 @@ def index_bytes(entries):
     return struct.pack('<4sIII', b'FIX1', len(rows), 0, 0) + b''.join(struct.pack('<III', *r) for r in rows)
 
 
+def master(xml_path, binp, lic):
+    """mkpsxiso, then (no license file) sectors 0..15 cleared: mkpsxiso leaves the Form 2 user data of the
+    empty license area uninitialised, so two runs differed there (a reproducible image needs zeros; EDC 0 =
+    none, as psx-spx allows for Form 2)."""
+    subprocess.run([MKPSXISO, '-y', '-q', '-w', xml_path], check=True)
+    if lic:
+        return
+    with open(binp, 'r+b') as f:
+        for lba in range(16):
+            f.seek(lba * 2352 + 18)
+            if f.read(1)[0] & 0x20:  # Form 2
+                f.seek(lba * 2352 + 24)
+                f.write(bytes(2352 - 24))
+
+
 def emit_file(rel, iso_root, out, counts):
     parts = rel.split(os.sep)
     full = os.path.join(iso_root, rel)
@@ -191,13 +206,13 @@ def main():
     ])
     xml_path = os.path.join(work, 'disc.xml')
     open(xml_path, 'w').write(xml)
-    subprocess.run([MKPSXISO, '-y', '-q', '-w', xml_path], check=True)
+    master(xml_path, out + '.bin', lic)
     entries = [e for e in iso_walk(out + '.bin')[0] if '/' in e[0]]
     if len(entries) != len(files):
         sys.exit('ERROR: %d files in the image, %d laid out' % (len(entries), len(files)))
     table = index_bytes(entries)
     open(idx, 'wb').write(table)
-    subprocess.run([MKPSXISO, '-y', '-q', '-w', xml_path], check=True)
+    master(xml_path, out + '.bin', lic)
     again, user = iso_walk(out + '.bin')
     if sorted(e for e in again if '/' in e[0]) != sorted(entries):
         sys.exit('ERROR: the layout changed between the two mastering passes')

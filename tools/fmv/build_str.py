@@ -71,11 +71,27 @@ def build(src, out_dir, tmp):
     # ends, as the PC decoder plays both to their end. The hold is measured on the encoded stream and grown
     # until every audio sector has a slot. The layout pass's audio is padded to the same length:
     # psxavenc ends the stream with its shorter input.
+    # Deterministic lengths (no -shortest: where it cuts depends on ffmpeg's buffering, so two runs could
+    # hold the last frame differently and encode different streams): the picture is decoded first, its
+    # frames counted, and the padded audio cut to a fixed duration from that count (-t is sample-exact).
     need = max(len(a) for a in audio.values()) / 18.75
     hold = 0.1
+    vid, wav0 = os.path.join(tmp, 'v_only.nut'), os.path.join(tmp, 'a_pad.wav')
     for _ in range(3):
-        run([FFMPEG, '-v', 'error', '-y', '-i', src, '-map', '0:v', '-map', '0:a:0', '-vf', SCALE + ',tpad=stop_mode=clone:stop_duration=%.3f' % hold,
-             '-af', 'apad', '-shortest', '-c:v', 'rawvideo', '-pix_fmt', 'yuv420p', '-c:a', 'pcm_s16le', nut])
+        # One thread for decoding and filtering: threaded decode + scale gave different pixels from run to run
+        # (1 in 5 under load), 8 of 8 identical single-threaded.
+        run([FFMPEG, '-v', 'error', '-y', '-threads', '1', '-i', src, '-filter_threads', '1', '-map', '0:v',
+             '-vf', SCALE + ',tpad=stop_mode=clone:stop_duration=%.3f' % hold, '-c:v', 'rawvideo', '-pix_fmt', 'yuv420p', vid])
+        probe = subprocess.run([FFPROBE, '-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries',
+                                'stream=nb_read_frames,r_frame_rate', '-of', 'csv=p=0', vid],
+                               capture_output=True, text=True, check=True).stdout.strip().split(',')
+        num, den = (int(x) for x in probe[0].split('/'))
+        frames = int(probe[1])
+        # audio 1 s longer than the picture: psxavenc stops at its shorter input, so the picture ends the
+        # stream with its last frame complete (these audio sectors are replaced below anyway)
+        run([FFMPEG, '-v', 'error', '-y', '-i', src, '-map', '0:a:0', '-af', 'apad', '-t', '%.6f' % (frames * den / num + 1.0),
+             '-c:a', 'pcm_s16le', wav0])
+        run([FFMPEG, '-v', 'error', '-y', '-i', vid, '-i', wav0, '-map', '0:v', '-map', '1:a', '-c', 'copy', nut])
         run([PSXAVENC, '-q', '-t', 'str', '-v', 'v2', '-f', '37800', '-b', '8', '-c', '2', '-F', str(XA_FILE), '-C', str(CH_JP),
              '-s', '%dx%d' % (WIDTH, HEIGHT), '-r', '15', '-x', '2', nut, base])
         secs = xa_sectors(base)

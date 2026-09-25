@@ -16,11 +16,13 @@ The PC source files stay in the tree (.gif .wav .ogg); tools/disc/build_disc.py 
 disc.
 
 Output: OUT/build/iso/Data/** and OUT/build/manifest/ (OUT = the repo by default, so `make disc`
-works on it). Needs: a C++17 compiler (CXX), Python with Pillow + numpy.
+works on it). External tools, found on PATH or through these environment variables: PSXAVENC, FFMPEG,
+FFPROBE, CXX (a C++17 compiler for tools/rsdkmanifest), make, MKPSXISO (with --disc-tools: the public
+builder checks it here too). Python: Pillow + numpy. Missing tools are listed before anything runs.
 
 Usage: build_assets.py (--rsdk PATH/Data.rsdk | --data PATH/Data) [--videos DIR] [--out DIR] [--lang en|jp]
 """
-import argparse, os, shutil, subprocess, sys
+import argparse, importlib.util, os, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..'))
@@ -29,6 +31,38 @@ PY = sys.executable
 # since phase 4: the Secrets gallery streams its biggest pictures on demand (<Stage>.pic).
 ATLAS_KNOWN_OVER = set()
 LANG_IDS = {'en': 0, 'jp': 5}  # RetroEngine.hpp RetroLanguages
+WORKSPACE_TOOLS = {  # the development workspace's builds, used when nothing else is configured
+    'PSXAVENC': os.path.join(REPO, '..', 'psxavenc', 'build', 'psxavenc'),
+    'MKPSXISO': os.path.join(REPO, '..', 'mkpsxiso-2.30-Darwin', 'bin', 'mkpsxiso'),
+}
+
+
+def find_tool(env, name):
+    path = os.environ.get(env) or shutil.which(name)
+    if not path and os.path.exists(WORKSPACE_TOOLS.get(env, '')):
+        path = WORKSPACE_TOOLS[env]
+    return path
+
+
+def check_tools(need_disc=False):
+    """The external tools (as environment variables for the converters); exits with a list if any is missing."""
+    tools, missing = {}, []
+    wanted = [('PSXAVENC', 'psxavenc'), ('FFMPEG', 'ffmpeg'), ('FFPROBE', 'ffprobe')]
+    if need_disc:
+        wanted.append(('MKPSXISO', 'mkpsxiso'))
+    for env, name in wanted:
+        p = find_tool(env, name)
+        (tools.__setitem__(env, os.path.abspath(p)) if p else missing.append('%s (or set %s)' % (name, env)))
+    cxx = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('g++') or shutil.which('c++')
+    (tools.__setitem__('CXX', cxx) if cxx else missing.append('a C++17 compiler: clang++ or g++ (or set CXX)'))
+    if not shutil.which('make'):
+        missing.append('make')
+    for mod, pkg in (('PIL', 'Pillow'), ('numpy', 'numpy')):
+        if importlib.util.find_spec(mod) is None:
+            missing.append('Python package %s (pip install %s)' % (pkg, pkg))
+    if missing:
+        sys.exit('Missing tools:\n  ' + '\n  '.join(missing))
+    return tools
 
 
 def run(step, cmd, **kw):
@@ -45,7 +79,9 @@ def main():
     ap.add_argument('--videos', help="Sonic CD's videos/*.ogv (default: videos/ next to Data.rsdk or Data/)")
     ap.add_argument('--lang', default='en', choices=('en', 'jp'),
                     help="the disc's language (one disc per language, docs/28 phase 4)")
+    ap.add_argument('--disc-tools', action='store_true', help='also require mkpsxiso (the disc step that follows)')
     a = ap.parse_args()
+    os.environ.update(check_tools(need_disc=a.disc_tools))  # the converters read PSXAVENC / FFMPEG / ... from here
     out = os.path.abspath(a.out)
     iso, manifest = os.path.join(out, 'build', 'iso'), os.path.join(out, 'build', 'manifest')
     for d in (iso, manifest):
@@ -63,7 +99,7 @@ def main():
     r = run('1 scripts', [PY, os.path.join(HERE, 'scripts', 'patch_bytecode.py'), data], capture_output=True, text=True)
     print('[1 scripts] ' + r.stdout.strip())
 
-    cxx = os.environ.get('CXX') or shutil.which('clang++') or shutil.which('g++') or 'c++'
+    cxx = os.environ['CXX']
     run('2 manifest', ['make', '-s', '-C', os.path.join(HERE, 'rsdkmanifest'), 'CXX=' + cxx])
     run('3 fonts', [PY, os.path.join(HERE, 'font', 'prescale_font.py'), data, '--lang', a.lang])
     # One manifest + atlas set per selectable player (docs/28 3.2: Sonic and Tails don't fit one atlas):
