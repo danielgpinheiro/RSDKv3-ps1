@@ -495,6 +495,93 @@ static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, boo
     PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
 }
 
+// GPU limits (psx-spx GPU "Vertex"): coordinates are 11-bit signed (-1024..1023, beyond that they wrap)
+// and a polygon spanning more than 1023 x 511 pixels is not drawn at all. Upstream's software renderer
+// clips everything to the screen; here primitives beyond the limits are clipped to it first (a UFO
+// next to the special-stage camera is drawn up to ~96x its size; the menu background's 3D panels
+// project to several screens).
+volatile uint32_t g_ps1GpuClipped = 0; // primitives clipped to the screen because they were beyond the limits
+volatile uint32_t g_ps1GpuLimit   = 0; // primitives still beyond the limits (drawn as they are: GDB check)
+
+static bool PS1BeyondGpuLimits(int x0, int y0, int x1, int y1)
+{
+    return x0 < -1024 || y0 < -1024 || x1 > 1023 || y1 > 1023 || x1 - x0 > 1023 || y1 - y0 > 511;
+}
+
+// PS1ChainPieceRect for any size: a piece beyond the GPU limits is cut to the screen, its texel edges
+// moved in proportion (mirrored pieces from the far edge).
+static void PS1ChainPieceRectClipped(const PS1Piece &p, int x, int y, int w, int h, bool flipX, bool flipY)
+{
+    if (!PS1BeyondGpuLimits(x, y, x + w, y + h)) {
+        PS1ChainPieceRect(p, x, y, w, h, flipX, flipY);
+        return;
+    }
+    g_ps1GpuClipped = g_ps1GpuClipped + 1;
+    int cx0 = x < 0 ? 0 : x, cx1 = x + w > SCREEN_XSIZE ? SCREEN_XSIZE : x + w;
+    int cy0 = y < 0 ? 0 : y, cy1 = y + h > SCREEN_YSIZE ? SCREEN_YSIZE : y + h;
+    if (cx0 >= cx1 || cy0 >= cy1)
+        return;
+    auto edge = [](int base, int texels, int pos, int len, bool flip) {
+        int t = (int)((int64_t)pos * texels / len);
+        return flip ? base + texels - t : base + t;
+    };
+    int u0 = edge(p.u, p.w, cx0 - x, w, flipX), u1 = edge(p.u, p.w, cx1 - x, w, flipX);
+    int v0 = edge(p.v, p.h, cy0 - y, h, flipY), v1 = edge(p.v, p.h, cy1 - y, h, flipY);
+    int16_t xs[4] = { (int16_t)cx0, (int16_t)cx1, (int16_t)cx0, (int16_t)cx1 };
+    int16_t ys[4] = { (int16_t)cy0, (int16_t)cy0, (int16_t)cy1, (int16_t)cy1 };
+    PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
+}
+
+// A convex polygon (screen coordinates, any size) cut to the screen (Sutherland-Hodgman) and chained as
+// a fan of flat triangles: cmd = GP0 20h (| 02000000h semi-transparent) with the BGR colour.
+static void PS1ChainFlatPolygonClipped(const int *px, const int *py, int n, uint32_t cmd, int repeat)
+{
+    int ax[12], ay[12], bx[12], by[12];
+    for (int i = 0; i < n; ++i) ax[i] = px[i], ay[i] = py[i];
+    for (int side = 0; side < 4 && n > 0; ++side) {
+        // side 0: x >= 0, 1: x <= W, 2: y >= 0, 3: y <= H
+        auto inside = [&](int x, int y) {
+            switch (side) {
+                case 0: return x >= 0;
+                case 1: return x <= SCREEN_XSIZE;
+                case 2: return y >= 0;
+                default: return y <= SCREEN_YSIZE;
+            }
+        };
+        auto cross = [&](int x0, int y0, int x1, int y1, int *ox, int *oy) {
+            if (side < 2) {
+                int e = side == 0 ? 0 : SCREEN_XSIZE;
+                *ox   = e;
+                *oy   = y0 + (int)((int64_t)(y1 - y0) * (e - x0) / (x1 - x0));
+            }
+            else {
+                int e = side == 2 ? 0 : SCREEN_YSIZE;
+                *oy   = e;
+                *ox   = x0 + (int)((int64_t)(x1 - x0) * (e - y0) / (y1 - y0));
+            }
+        };
+        int m = 0;
+        for (int i = 0; i < n && m < 10; ++i) {
+            int j = (i + 1) % n;
+            bool in0 = inside(ax[i], ay[i]), in1 = inside(ax[j], ay[j]);
+            if (in0)
+                bx[m] = ax[i], by[m] = ay[i], ++m;
+            if (in0 != in1) {
+                cross(ax[i], ay[i], ax[j], ay[j], &bx[m], &by[m]);
+                ++m;
+            }
+        }
+        n = m;
+        for (int i = 0; i < n; ++i) ax[i] = bx[i], ay[i] = by[i];
+    }
+    for (int i = 1; i + 1 < n; ++i) {
+        uint32_t w[4] = { cmd, (uint32_t)(uint16_t)ax[0] | ((uint32_t)(uint16_t)ay[0] << 16),
+                          (uint32_t)(uint16_t)ax[i] | ((uint32_t)(uint16_t)ay[i] << 16),
+                          (uint32_t)(uint16_t)ax[i + 1] | ((uint32_t)(uint16_t)ay[i + 1] << 16) };
+        for (int r = 0; r < repeat; ++r) PS1ChainPrimsRawN(w, 4, 1);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Upstream API
 
@@ -1429,7 +1516,7 @@ void DrawSpriteScaled(int direction, int XPos, int YPos, int pivotX, int pivotY,
         if (b <= a || d <= t)
             return;
         int x = fx ? x0 + W - b : x0 + a;
-        PS1ChainPieceRect(p, x, y0 + t, b - a, d - t, fx, false);
+        PS1ChainPieceRectClipped(p, x, y0 + t, b - a, d - t, fx, false);
     });
 }
 
@@ -1643,16 +1730,31 @@ void DrawFace(void *v, uint colour)
     int level       = alpha >= 0xFE ? 3 : PS1AlphaLevel(alpha);
     if (!level)
         return;
-    uint32_t w[5];
-    w[0] = 0x28000000 | (colour & 0xFF) << 16 | (colour & 0xFF00) | ((colour >> 16) & 0xFF); // GP0 28h flat quad, BGR
-    for (int k = 0; k < 4; ++k) w[1 + k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
+    uint32_t bgr = (colour & 0xFF) << 16 | (colour & 0xFF00) | ((colour >> 16) & 0xFF);
+    uint32_t semi = 0;
     if (level < 3) { // semi-transparent: B/2 + F/2 (the texpage's mode), twice for 75 %
         psyqo::PrimPieces::TPageAttr attr;
         attr.set(psyqo::Prim::TPageAttr::SemiTrans::HalfBackAndHalfFront);
         PS1ChainTPage(attr);
-        w[0] |= 0x02000000;
+        semi = 0x02000000;
     }
-    for (int i = 0; i < (level == 2 ? 2 : 1); ++i) PS1ChainPrimsRawN(w, 5, 1);
+    int repeat = level == 2 ? 2 : 1;
+    int x0 = q[0].x, x1 = q[0].x, y0 = q[0].y, y1 = q[0].y;
+    for (int k = 1; k < 4; ++k) {
+        x0 = q[k].x < x0 ? q[k].x : x0, x1 = q[k].x > x1 ? q[k].x : x1;
+        y0 = q[k].y < y0 ? q[k].y : y0, y1 = q[k].y > y1 ? q[k].y : y1;
+    }
+    if (PS1BeyondGpuLimits(x0, y0, x1, y1)) { // the quad as a polygon (corners A B D C), cut to the screen
+        g_ps1GpuClipped = g_ps1GpuClipped + 1;
+        int px[4] = { q[0].x, q[1].x, q[3].x, q[2].x }, py[4] = { q[0].y, q[1].y, q[3].y, q[2].y };
+        PS1ChainFlatPolygonClipped(px, py, 4, 0x20000000 | semi | bgr, repeat);
+        g_ps1Faces = g_ps1Faces + 1;
+        return;
+    }
+    uint32_t w[5];
+    w[0] = 0x28000000 | semi | bgr; // GP0 28h flat quad, BGR
+    for (int k = 0; k < 4; ++k) w[1 + k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
+    for (int i = 0; i < repeat; ++i) PS1ChainPrimsRawN(w, 5, 1);
     g_ps1Faces = g_ps1Faces + 1;
 }
 
@@ -1670,6 +1772,15 @@ void DrawTexturedFace(void *v, byte sheetID)
     for (int k = 1; k < 4; ++k) {
         u0 = q[k].u < u0 ? q[k].u : u0, u1 = q[k].u > u1 ? q[k].u : u1;
         v0 = q[k].v < v0 ? q[k].v : v0, v1 = q[k].v > v1 ? q[k].v : v1;
+    }
+    {
+        int x0 = q[0].x, x1 = q[0].x, y0 = q[0].y, y1 = q[0].y;
+        for (int k = 1; k < 4; ++k) {
+            x0 = q[k].x < x0 ? q[k].x : x0, x1 = q[k].x > x1 ? q[k].x : x1;
+            y0 = q[k].y < y0 ? q[k].y : y0, y1 = q[k].y > y1 ? q[k].y : y1;
+        }
+        if (PS1BeyondGpuLimits(x0, y0, x1, y1))
+            g_ps1GpuLimit = g_ps1GpuLimit + 1;
     }
     const PS1AtlasCluster *c = PS1FindCluster(sheet, u0, v0);
     // UV edges may reach the cluster's far edge (u1 == srcX + w): texel u1 itself is never sampled.
