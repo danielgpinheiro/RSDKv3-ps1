@@ -14,7 +14,8 @@ PS1 the button opens `Options Menu`, without INSTRUCTIONS:
   - its entry labels (sprite frames 10-13, highlighted 14-17) move up one, so entry k shows label k + 1;
   - draw: the 4th entry slot is moved off screen (its `Add OBJECTYPOS, 40` -> -1000).
 Special stages (docs/28 special-stage speed): Special Setup's draw sub, a bubble sort of draw list 3 in
-script, becomes one PS1SortDrawList instruction (a PS1 engine opcode running the same loop natively).
+script, becomes one PS1SortDrawList instruction (a PS1 engine opcode running the same loop natively); SS5's
+BGEffects deformation ramp loop becomes PS1DeformRamp.
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected
 stops the build. Already patched files are recognised and left alone.
 
@@ -226,10 +227,70 @@ def patch_ss_sort(data):
     return 'draw-list sort native in %s%s' % (' '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
+# Special stage BGEffects draw subs ending in a deformation ramp loop (SS5): -> PS1DeformRamp first, start,
+# parallax entry, shift (RSDKv3/Script.cpp: the same loop natively), then End. Constants taken from the code.
+def ramp_pattern(k):
+    """The loop's instructions with its constants as placeholders (None = any int, checked after)."""
+    return [
+        ('Equal', [('var', ('ARRAYPOS0', 0)), ('int', k['first'])]),
+        ('Equal', [('var', ('TEMPVALUE2', 0)), ('int', k['start'])]),
+        ('Equal', [('var', ('TEMPVALUE3', 0)), ('int', 0)]),
+        ('WGreater', [('int', k['j']), ('var', ('ARRAYPOS0', 0)), ('int', -1)]),
+        ('Equal', [('var', ('TEMPVALUE4', 0)), ('var', ('HPARALLAXSCROLLPOS', 1, (0, k['p'])))]),
+        ('Mul', [('var', ('TEMPVALUE4', 0)), ('var', ('TEMPVALUE2', 0))]),
+        ('ShR', [('var', ('TEMPVALUE4', 0)), ('int', k['shift'])]),
+        ('Equal', [('var', ('STAGEDEFORMATIONDATA2', 1, (1, 0))), ('var', ('TEMPVALUE4', 0))]),
+        ('Sub', [('var', ('TEMPVALUE2', 0)), ('var', ('TEMPVALUE3', 0))]),
+        ('Inc', [('var', ('TEMPVALUE3', 0))]),
+        ('Dec', [('var', ('ARRAYPOS0', 0))]),
+        ('loop', []),
+        ('End', []),
+    ]
+
+
+def patch_ss_ramp(data):
+    names, vars_ = bs.tables()
+    op = [n for n, _ in names].index('PS1DeformRamp')
+    done, already = [], []
+    for pos, (folder, _) in enumerate(game_stage_lists(data)[3]):
+        path = os.path.join(data, 'Scripts', 'ByteCode', 'SS%03d.bin' % pos)
+        try:
+            obj, _ = object_index(data, folder, 'BGEffects')
+        except ValueError:
+            continue
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        ins = instructions(code, bs.subs(path)[obj][2], names, vars_)
+        if any(n == 'PS1DeformRamp' for _, n, _ in ins):
+            already.append(folder)
+            continue
+        for k in range(len(ins) - 12):
+            at, n, ops = ins[k]
+            if n != 'Equal' or ops[0][1] != ('ARRAYPOS0', 0) or ops[1][0] != 'int':
+                continue
+            seq = ins[k:k + 13]
+            try:
+                c = {'first': seq[0][2][1][1], 'start': seq[1][2][1][1], 'j': seq[3][2][0][1],
+                     'p': seq[4][2][1][1][2][1], 'shift': seq[6][2][1][1]}
+            except (IndexError, TypeError):
+                continue
+            got = [(nn, [(o[0], o[1]) for o in oo]) for _, nn, oo in seq]
+            if got != ramp_pattern(c):
+                continue
+            code[at:at + 10] = [op, 2, c['first'], 2, c['start'], 2, c['p'], 2, c['shift'], 0]  # ... / End
+            open(path, 'wb').write(encode(code) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+            done.append('%s (%d lines, factor %d, parallax %d, >> %d)' % (folder, c['first'] + 1, c['start'], c['p'], c['shift']))
+            break
+    return 'deformation ramp native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
     print('SS*.bin: ' + patch_ss_sort(data))
+    print('SS*.bin: ' + patch_ss_ramp(data))
 
 
 if __name__ == '__main__':

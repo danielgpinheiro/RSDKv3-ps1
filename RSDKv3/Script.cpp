@@ -501,6 +501,7 @@ const FunctionInfo functions[] = {
 #if RETRO_PLATFORM == RETRO_PS1
     // PS1 extension, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/28).
     FunctionInfo("PS1SortDrawList", 2),
+    FunctionInfo("PS1DeformRamp", 4),
 #endif
 };
 
@@ -930,6 +931,7 @@ enum ScrFunction {
 #endif
 #if RETRO_PLATFORM == RETRO_PS1
     FUNC_PS1SORTDRAWLIST,
+    FUNC_PS1DEFORMRAMP,
 #endif
     FUNC_MAX_CNT
 };
@@ -4248,6 +4250,30 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     }
                     ++t[0];
                 }
+                break;
+            }
+            case FUNC_PS1DEFORMRAMP: {
+                // Special stage 5's BGEffects draw sub fills a deformation ramp in script every frame (129
+                // iterations, ~1,000 VM instructions, ~200 hblanks). The same loop natively (operands: first
+                // line, start factor, parallax entry, shift), down to the temp values it leaves:
+                //   a = first, t2 = start, t3 = 0; while (a > -1) { t4 = (hParallax[p] * t2) >> shift;
+                //   bgDeformationData2[a] = t4; t2 -= t3; ++t3; --a }
+                opcodeSize = 0;
+                int first = scriptEng.operands[0], p = scriptEng.operands[2], shift = scriptEng.operands[3];
+                if (first >= DEFORM_COUNT || (uint)p >= PARALLAX_COUNT)
+                    break;
+                int *t = scriptEng.tempValue;
+                int a  = first;
+                t[2]   = scriptEng.operands[1];
+                t[3]   = 0;
+                while (a > -1) {
+                    t[4]                  = (hParallax.scrollPos[p] * t[2]) >> shift;
+                    bgDeformationData2[a] = t[4];
+                    t[2] -= t[3];
+                    ++t[3];
+                    --a;
+                }
+                scriptEng.arrayPosition[0] = a;
                 break;
             }
 #endif
