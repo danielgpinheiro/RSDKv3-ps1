@@ -2115,7 +2115,9 @@ static void PS1Draw3DFloor(int layerID)
                 continue;
             for (int zz = za; ; zz = zb) {
                 if (zz >= zlo && zz <= zhi) {
-                    int x = px[c] + (int)((int64_t)(zz - pz[c]) * (px[n] - px[c]) / (pz[n] - pz[c]));
+                    // 32-bit: floor coordinates are px within the 4096-px floor (|products| < 2^25);
+                    // a 64-bit divide is a slow libgcc call on the R3000A
+                    int x = px[c] + (zz - pz[c]) * (px[n] - px[c]) / (pz[n] - pz[c]);
                     lo = x < lo ? x : lo, hi = x > hi ? x : hi;
                 }
                 if (zz == zb)
