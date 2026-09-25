@@ -224,7 +224,6 @@ int LoadStageFile(const char *filePath, int stageID, FileInfo *info) {
 // PS1 profiling clock (ps1/video.cpp) used by Script.cpp's Draw3DScene profile.
 uint32_t PS1Hblanks() { return 0; }
 uint32_t PS1HblanksSince(uint32_t) { return 0; }
-bool PS1SkipDraw() { return false; } // ps1/render.cpp adaptive frame skip: the host always draws
 
 // Renderer hook (ps1/render.cpp): a script changed a chunk tile.
 void PS1TileChanged(int) {}
