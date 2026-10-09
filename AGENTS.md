@@ -39,6 +39,12 @@ tools/load_profile.sh OUT.log [STOP]    # CD requests / files per load (a BOOT= 
 tools/memcard/save_test.sh [WORKDIR]    # save / reload on temporary card images (config backed up)
 make dist                               # licensed (../LICENSE.DAT by path), verified image in build/dist/
 tools/scene3d/sort3d_check.sh   # host: PS1 3D draw-list sort == upstream order
+# Speed pass 2 kit (docs/28 appendix "speed pass 2"); emulators via tools/redux_env.sh (own redux16mb, stock RAM/VRAM,
+# GDB 3338, muted) and tools/ds_env.sh (DuckStation, only when no other session runs it):
+tools/play/survey.sh OUT SCENE...          # scripted runs: CPU hblanks / vsyncs a frame (avg, worst) per scene
+tools/play/ab_run.sh SCENE [FROM TO]       # reference build (clean worktree build/refwt) vs working tree: timing + exactness
+tools/play/sample_scene.sh OUT SCENE [FROM TO] [--lines FUNC]   # PC sampler profile (functions, script subs, instructions)
+tools/play/vm_step.sh SCENE [FRAME N]      # machine instructions per script VM instruction (GDB single steps)
 python3 tools/bytecode_scan.py DATA --find X --values VAR [--where RS000.bin]   # who uses what
 ```
 Time loads with the vblank IRQ count (`g_ps1GPU->m_frameCount`): psyqo `GPU::now()` stalls while

@@ -3,7 +3,7 @@
 # DuckStation is shared with other sessions: it starts only when no DuckStation runs at all (otherwise exit 2), and
 # the settings a run changes (a non-persistent card, StartPaused so GDB's first continue starts the boot, the output
 # muted: user 2026-10-09) are backed up and restored. It boots a disc built for the run (build/ds/game: the EXE given
-# + the data tree; ~574 MB, rewritten each run), never the user's own card.
+# + the data tree, DS_ISO or build/iso; ~574 MB, rewritten each run), never the user's own card.
 DS_BIN=/Applications/DuckStation.app/Contents/MacOS/DuckStation
 DS_SET="$HOME/Library/Application Support/DuckStation/settings.ini"
 DS_PID=
@@ -15,7 +15,7 @@ ds_restore() { [ -n "$DS_BAK" ] && [ -f "$DS_BAK" ] && cp "$DS_BAK" "$DS_SET"; D
 ds_start() {
     pgrep -f "DuckStation.app/Contents/MacOS" >/dev/null && { echo "DuckStation is running (another session): not starting it" >&2; exit 2; }
     mkdir -p build/ds
-    /usr/bin/python3 tools/disc/build_disc.py build/iso "$2" none build/ds/game > "$1.ds_disc.log" 2>&1 || { echo "ds disc build failed ($1.ds_disc.log)" >&2; exit 1; }
+    /usr/bin/python3 tools/disc/build_disc.py "${DS_ISO:-build/iso}" "$2" none build/ds/game > "$1.ds_disc.log" 2>&1 || { echo "ds disc build failed ($1.ds_disc.log)" >&2; exit 1; }
     DS_BAK="$1.settings.bak"; cp "$DS_SET" "$DS_BAK"; trap ds_restore EXIT
     /usr/bin/python3 - "$DS_SET" <<'PYEOF'
 import re, sys
