@@ -11,6 +11,8 @@
 #   CHECK="f1 f2 ..."     at these frames dump the logic state (OUT_state_F.bin: entities, players, script engine,
 #                         globals) and VRAM (OUT_F_vram.bin) for A/B checks (tools/play/ab_compare.py)
 #   EXTRA="gdb lines"     also run at each CHECK frame (\n-separated), e.g. a printf of counters
+#   POKE="gdb lines"      run at each CHECK frame after the dump, in the reference run too (tools/play/ab_run.sh):
+#                         a state change both builds then run from (e.g. forcing a path the pad script never takes)
 #   DISC=path.cue         the disc (default build/game.cue; A/B reference runs use the reference data's disc)
 #   NOBUILD=1             run the EXE as it is (an A/B snapshot: EXE=path ELF=path)
 #   EMU=ds                DuckStation (retail BIOS; only when no other session runs it): timing only
@@ -57,6 +59,7 @@ EMU=${EMU:-redux}
     echo "  append binary memory ${OUT}_state_$c.bin &globalVariables[0] &globalVariables[sizeof(globalVariables)/sizeof(globalVariables[0])]"
     echo "  printf \"CHECK %u stage=%s cam=%d,%d\\n\", g_ps1PerfFrames, stageList[activeStageList][stageListPosition].folder, xScrollOffset, yScrollOffset"
     [ -n "${EXTRA:-}" ] && printf '%b\n' "$EXTRA"
+    [ -n "${POKE:-}" ] && printf '%b\n' "$POKE"
     [ "$EMU" != ds ] && echo "  shell REDUX_WEB=\$WEB python3 tools/vramshot.py ${OUT}_$c >/dev/null"
     echo "end"
   done
