@@ -145,9 +145,38 @@ static void PS1ChainFlatRaw(const uint32_t *w, int words)
         g_ps1FadeDirectDropped = g_ps1FadeDirectDropped + 1;
 }
 
+// The last conversion's inputs (speed pass 2): the frame start and FlipScreen convert the same bank, and most frames
+// don't touch the palette, so s_pal is rebuilt only when the source colours, the bank, the fade or the atlas CLUTs differ.
+static uint32_t s_palSrc[PALETTE_SIZE * 3 / 4]; // the source colours as words (a bank is 768 bytes, word aligned)
+static_assert(sizeof(fullPalette32[0]) == sizeof(s_palSrc) && sizeof(fullPalette32[0]) % 4 == 0, "palette bank as words");
+// true when the bank's colours equal the copy (word compare: the libc memcmp goes byte by byte)
+static bool PS1PalSame(const PaletteEntry *pal) // fullPalette32 is word aligned (RSDKv3/Palette.cpp) and a bank is 768 bytes
+{
+    const uint32_t *a = reinterpret_cast<const uint32_t *>(pal);
+    for (int i = 0; i < (int)(sizeof(s_palSrc) / 4); ++i)
+        if (a[i] != s_palSrc[i])
+            return false;
+    return true;
+}
+static int s_palBank = -1, s_palFade = -1, s_palFadeA, s_palFadeR, s_palFadeG, s_palFadeB;
+static uint32_t s_palAtlasLoads = 0xFFFFFFFF;
+static int s_palClutCount = -1;
+volatile uint32_t g_ps1PalBuilds = 0, g_ps1PalReuses = 0;
+
 static void PS1BuildPalette(int bank)
 {
     const PaletteEntry *pal = fullPalette32[bank];
+    int fade = s_fadePending ? 1 : 0;
+    if (bank == s_palBank && fade == s_palFade
+        && (!fade || (s_fadeA == s_palFadeA && s_fadeR == s_palFadeR && s_fadeG == s_palFadeG && s_fadeB == s_palFadeB))
+        && s_palAtlasLoads == g_ps1AtlasLoads && s_palClutCount == g_ps1AtlasClutCount && PS1PalSame(pal)) {
+        g_ps1PalReuses = g_ps1PalReuses + 1;
+        return;
+    }
+    g_ps1PalBuilds = g_ps1PalBuilds + 1;
+    memcpy(s_palSrc, pal, sizeof(s_palSrc));
+    s_palBank = bank, s_palFade = fade, s_palAtlasLoads = g_ps1AtlasLoads, s_palClutCount = g_ps1AtlasClutCount;
+    s_palFadeA = s_fadeA, s_palFadeR = s_fadeR, s_palFadeG = s_fadeG, s_palFadeB = s_fadeB;
     s_pal[0]                = 0x0000;                          // index 0 = transparent (tiles and sprites)
     if (s_fadePending) {
         int a = s_fadeA, na = 255 - a;

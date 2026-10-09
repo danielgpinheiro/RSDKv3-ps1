@@ -1,7 +1,11 @@
 #include "RetroEngine.hpp"
 
 // Palettes (as RGB888 Colours)
+#if RETRO_PLATFORM == RETRO_PS1
+alignas(4) PaletteEntry fullPalette32[PALETTE_COUNT][PALETTE_SIZE]; // ps1/render.cpp compares banks as words
+#else
 PaletteEntry fullPalette32[PALETTE_COUNT][PALETTE_SIZE];
+#endif
 PaletteEntry *activePalette32 = fullPalette32[0];
 
 // Palettes (as RGB565 Colours)
