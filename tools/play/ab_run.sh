@@ -15,7 +15,7 @@ eval "$(sed -n '/^act_pad()/p;/^ss_pad()/p;/^pad_for()/,/^}/p' tools/play/survey
 PADS="$(pad_for $scene)"
 if [ ! -f $R/$tag.ps-exe ] || [ -n "${REBUILD_REF:-}" ]; then
   [ -d build/refwt ] || { git worktree add -q build/refwt $REF && ln -sfn ../../nugget build/nugget; }
-  ( cd build/refwt && git checkout -q $REF && rm -f RSDKv3/main.o RSDKv3/RetroEngine.o && make -j8 BOOT=$scene BOOT_ID=$bid SAMPLE= > ../perf2/ref/$tag.build.log 2>&1 ) || { echo "REF BUILD FAIL"; exit 1; }
+  ( cd build/refwt && git checkout -q $REF && find . -name "*.o" -not -path "./third_party/*" -delete && make -j8 BOOT=$scene BOOT_ID=$bid SAMPLE= > ../perf2/ref/$tag.build.log 2>&1 ) || { echo "REF BUILD FAIL"; exit 1; }
   cp build/refwt/rsdkv3.ps-exe $R/$tag.ps-exe; cp build/refwt/rsdkv3.elf $R/$tag.elf
 fi
 sfx=; [ "${EMU:-redux}" = ds ] && sfx=_ds

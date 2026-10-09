@@ -67,7 +67,10 @@ struct VarFragment {
     size_t getActualFragmentSize() const { return words; }
 };
 
-uint32_t *s_arenaMem = nullptr; // 2 x s_arenaWords (heap), nullptr while suspended
+// One arena per frame parity, each its own heap block (speed pass 2: one 2 x 64 KB block did not fit the Menu's heap,
+// whose free space a load leaves in two pieces, ~100 KB and ~130 KB, around a few small blocks); nullptr while suspended.
+uint32_t *s_arena[2]    = { nullptr, nullptr };
+uint32_t s_arenaSize[2] = { 0, 0 }; // words each holds (s_arenaWords, or less if the heap had no room: see PS1ChainBegin)
 uint32_t s_arenaWords = PS1_CHAIN_ARENA_WORDS; // per parity; smaller while an FMV plays (PS1ChainSetArenaWords)
 void (*s_hook)() = nullptr;
 
@@ -136,24 +139,34 @@ void chainSimple(const Prim &prim) {
 
 } // namespace
 
-volatile uint32_t g_ps1ChainArenaFail = 0; // frames without an arena (heap full): nothing drawn
+volatile uint32_t g_ps1ChainArenaFail  = 0; // frames without an arena (heap full): nothing drawn
+volatile uint32_t g_ps1ChainArenaSmall = 0; // arenas allocated smaller than asked (the heap had no room for the full size)
+#define PS1_CHAIN_ARENA_MIN_WORDS 2048 // smallest arena tried (8 KB; the Menu chains ~600 words a frame)
 volatile uint32_t g_ps1ChainSuspends  = 0; // arenas released for a load
 static bool s_suspended = false;
 
 void PS1ChainBegin(psyqo::GPU &gpu) {
     s_gpu = &gpu;
-    if (!s_arenaMem && !s_suspended)
-        s_arenaMem = (uint32_t *)psyqo_malloc(2 * s_arenaWords * 4);
-    if (!s_arenaMem) {
+    for (int a = 0; a < 2 && !s_suspended; ++a) {
+        if (s_arena[a])
+            continue;
+        uint32_t words = s_arenaWords;
+        while (!(s_arena[a] = (uint32_t *)psyqo_malloc(words * 4)) && words / 2 >= PS1_CHAIN_ARENA_MIN_WORDS) words /= 2;
+        s_arenaSize[a] = s_arena[a] ? words : 0;
+        if (s_arena[a] && words < s_arenaWords)
+            g_ps1ChainArenaSmall = g_ps1ChainArenaSmall + 1;
+    }
+    int parity = gpu.getParity() ? 1 : 0;
+    if (!s_arena[parity]) {
         g_ps1ChainArenaFail = g_ps1ChainArenaFail + 1;
         s_base = s_cur = s_end = nullptr;
         s_batch  = nullptr;
         s_sbatch = nullptr;
         return;
     }
-    s_base       = s_arenaMem + (gpu.getParity() ? s_arenaWords : 0);
+    s_base       = s_arena[parity];
     s_cur        = s_base;
-    s_end        = s_base + s_arenaWords;
+    s_end        = s_base + s_arenaSize[parity];
     s_batch      = nullptr;
     s_sbatch     = nullptr;
     s_tpageValid = false;
@@ -170,14 +183,17 @@ void PS1ChainEnd() {
 }
 
 void PS1ChainSuspend() {
-    if (!s_arenaMem || s_suspended)
+    if ((!s_arena[0] && !s_arena[1]) || s_suspended)
         return;
     flushBatch();
     if (s_cur != s_base) // this frame already chained something psyqo points at: keep the arenas
         return;
     PS1GpuImmediate(); // the previous frame's chain may still be DMA'd from the other arena
-    psyqo_free(s_arenaMem);
-    s_arenaMem  = nullptr;
+    for (int a = 0; a < 2; ++a) {
+        if (s_arena[a])
+            psyqo_free(s_arena[a]);
+        s_arena[a] = nullptr, s_arenaSize[a] = 0;
+    }
     s_base = s_cur = s_end = nullptr;
     s_suspended = true;
     g_ps1ChainSuspends = g_ps1ChainSuspends + 1;

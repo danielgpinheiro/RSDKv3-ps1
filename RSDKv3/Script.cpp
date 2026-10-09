@@ -2440,6 +2440,9 @@ void ClearScriptData()
 
 }
 
+#if RETRO_PLATFORM == RETRO_PS1
+__attribute__((noinline)) static ObjectScript *PS1ScriptInfo() { return &objectScriptList[objectEntityList[objectLoop].type]; }
+#endif
 #if PS1_SAMPLE
 volatile int32_t g_ps1ScriptPC = 0; // the instruction ProcessScript runs (scriptCode index), 0 outside (ps1/pc_sampler.cpp)
 volatile uint32_t g_ps1ScriptOps = 0; // VM instructions run (SAMPLE builds)
@@ -3180,12 +3183,13 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
         }
 
 #if RETRO_PLATFORM == RETRO_PS1
-        // Computed where an opcode uses them (docs/28 speed pass 2: ~30 instructions a VM instruction when computed for
-        // every opcode): no opcode changes objectLoop, activePlayer or the running entity's type before using them, and
-        // the write-back below never uses them, so each use sees the value the upstream definitions give.
-#define scriptInfo (&objectScriptList[objectEntityList[objectLoop].type])
-#define entity     (&objectEntityList[objectLoop])
+        // scriptInfo and player are computed where an opcode uses them (docs/28 speed pass 2: with entity, ~30
+        // instructions a VM instruction when computed for every opcode; scriptInfo through a call, which keeps the code
+        // small, 67 uses): no opcode changes objectLoop, activePlayer or the running entity's type before using them,
+        // and the write-back below never uses them, so each use sees the value the upstream definitions give.
+#define scriptInfo (PS1ScriptInfo())
 #define player     (&playerList[activePlayer])
+        Entity *entity = &objectEntityList[objectLoop];
 #else
         ObjectScript *scriptInfo = &objectScriptList[objectEntityList[objectLoop].type];
         Entity *entity           = &objectEntityList[objectLoop];
@@ -4512,7 +4516,6 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 
 #if RETRO_PLATFORM == RETRO_PS1
 #undef scriptInfo
-#undef entity
 #undef player
 #endif
         // Set Values
