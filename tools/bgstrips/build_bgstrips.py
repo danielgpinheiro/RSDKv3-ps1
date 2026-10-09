@@ -9,9 +9,10 @@ layer lines into VRAM the stage's sprite atlas leaves free, as 8-bit rows of one
 the layer (the visual plane of its draw slot and tile flips baked in, index 0 = transparent), so a
 band of any height costs 1-3 sprites.
 
-Lines are chosen per 16-line tile row: rows with thin runs (lineScroll runs < 16 lines, or lines on a
-deforming hParallax entry: a new X every line) first, then
-the rows nearest to them, until the free VRAM is used. Rows left out are drawn with tiles.
+Lines are chosen per 16-line tile row, while the free VRAM lasts, by the tile primitives a row saves: its bands
+(lineScroll runs, or lines on a deforming hParallax entry: a new X every line) times how often the camera shows it
+(camera Y uniform over each act's height, the layer's parallaxFactor applied; any row when it scrolls by itself).
+Ties: thin rows (runs < 16 lines) first, then the rows nearest to them. Rows left out are drawn with tiles.
 
 Inputs (v3, as upstream Scene.cpp reads them): Backgrounds.bin (u8 layerCount, hParallax and
 vParallax lists of 4-byte entries, per layer u8 xsize, ysize, type, u16 parallaxFactor, u8 speed,
@@ -37,6 +38,7 @@ import numpy as np
 
 ATLAS_COLUMNS = [5, 6, 7, 8, 13, 14, 15]  # tools/atlas/build_atlas.py COLUMNS
 SCROLL_MAX = 20 * 128                     # PS1 TILELAYER_SCROLL_COUNT (Scene.hpp: 20 rows)
+SCREEN_H = 240                            # SCREEN_YSIZE
 MAX_REGIONS = 64
 MAX_PIECES = 9  # widest Sonic CD BG period: 2304 texels (R83C/D)
 REGION_BYTES = 10 + 6 * MAX_PIECES
@@ -83,7 +85,8 @@ def load_backgrounds(sdir):
     layers = {}
     for L in range(1, lc + 1):
         xs, ys, ty = rb(), rb(), rb()
-        j += 3  # parallaxFactor (2), scrollSpeed
+        pf = (rb() << 8) | rb()
+        speed = rb()
         ls = []
         while True:
             c = rb()
@@ -96,7 +99,8 @@ def load_backgrounds(sdir):
                 ls.append(c)
         ls = (ls + [0] * SCROLL_MAX)[:SCROLL_MAX]
         grid = [[(rb() << 8) | rb() for _ in range(xs)] for _ in range(ys)]
-        layers[L] = dict(xsize=xs, ysize=min(ys, SCROLL_MAX // 128), type=ty, lineScroll=ls, tiles=grid, deform=deform)
+        layers[L] = dict(xsize=xs, ysize=min(ys, SCROLL_MAX // 128), type=ty, lineScroll=ls, tiles=grid, deform=deform,
+                         parallaxFactor=pf, scrollSpeed=speed)
     return layers
 
 
@@ -110,6 +114,32 @@ def act_layers(sdir):
             i = 1 + a[0]
             cfgs.add((tuple(a[i:i + 4]), a[i + 4]))
     return sorted(cfgs)
+
+
+def act_heights(sdir):
+    """Each Act*.bin's layout height in pixels (title, 4 active layers, midpoint, u8 xsize, u8 ysize chunks)."""
+    hs = []
+    for f in sorted(os.listdir(sdir)):
+        if f.startswith('Act') and f.endswith('.bin'):
+            a = open(os.path.join(sdir, f), 'rb').read()
+            hs.append(a[1 + a[0] + 6] << 7)
+    return hs
+
+
+def row_visibility(L, full_h, heights):
+    """Per 16-line row, the mean share of its lines on screen over camera Y uniform in [0, act height - 240] (upstream
+    DrawHLineScrollLayer: line 0 on screen = yScrollOffset * parallaxFactor >> 8, wrapped to the layer height)."""
+    w = np.zeros(full_h)
+    n = 0
+    for h in heights:
+        cams = np.arange(0, max(h - SCREEN_H, 0) + 1)
+        if L['scrollSpeed']:
+            w += len(cams) * min(SCREEN_H, full_h) / full_h
+        else:
+            for y in (cams * L['parallaxFactor'] >> 8) % full_h:
+                w[(np.arange(SCREEN_H) + y) % full_h] += 1
+        n += len(cams)
+    return w.reshape(-1, 16).mean(1) / max(n, 1)
 
 
 def period_chunks(L):
@@ -185,6 +215,7 @@ def build_stage(data, name, atlas_suffix):
         return None, '%-7s no Backgrounds.bin' % name
     layers = load_backgrounds(sdir)
     cfgs = act_layers(sdir)
+    heights = act_heights(sdir)
     gfx, tiles = load_tiles(sdir)
     atl = os.path.join(data, 'Sprites', 'Atlas', name + atlas_suffix + '.atl')
 
@@ -212,18 +243,22 @@ def build_stage(data, name, atlas_suffix):
                 # Lines on a deforming parallax entry get a new X every line (water ripples): as thin.
                 df = L['deform']
                 thin.update(y >> 4 for y in range(full_h) if ls[y] < len(df) and df[ls[y]])
-                jobs.append(dict(layer=li, plane=key[1], L=L, period=p, pieces=pieces, rows=full_h >> 4, thin=thin))
+                bands = [1 + sum(1 for y in range(r * 16 + 1, r * 16 + 16)
+                                 if ls[y] != ls[y - 1] or (ls[y] < len(df) and df[ls[y]])) for r in range(full_h >> 4)]
+                vis = row_visibility(L, full_h, heights)
+                jobs.append(dict(layer=li, plane=key[1], L=L, period=p, pieces=pieces, rows=full_h >> 4, thin=thin,
+                                 gain=[round(float(v) * b, 6) for v, b in zip(vis, bands)]))
 
-    # Select rows: thin ones first, then nearest to a thin row, while pieces fit.
+    # Select rows: the most primitives saved first (ties: thin ones, then nearest to a thin row), while pieces fit.
     cands = []
     for ji, j in enumerate(jobs):
         for r in range(j['rows']):
             d = 0 if r in j['thin'] else (min(abs(r - t) for t in j['thin']) if j['thin'] else 1000 + r)
-            cands.append((d, ji, r))
+            cands.append((-j['gain'][r], d, ji, r))
     cands.sort()
     used = free_grid(atl)
     selected = set()
-    for d, ji, r in cands:
+    for _, d, ji, r in cands:
         j = jobs[ji]
         spots = []
         for w in j['pieces']:
@@ -291,7 +326,9 @@ def build_stage(data, name, atlas_suffix):
     summary = []
     for j in jobs:
         rows = sorted(r for (ji, r) in chosen if jobs[ji] is j)
-        summary.append('L%d/p%d period %d: %d/%d rows (thin %d)' % (j['layer'], j['plane'], j['period'], len(rows), j['rows'], len(j['thin'])))
+        summary.append('L%d/p%d period %d: %d/%d rows (thin %d, gain %.2f/%.2f)' % (
+            j['layer'], j['plane'], j['period'], len(rows), j['rows'], len(j['thin']),
+            sum(j['gain'][r] for r in rows), sum(j['gain'])))
     vram = sum(g['lines'] * sum(w // 2 for w in g['job']['pieces']) for g in regions)
     return bytes(out), '%-7s regions %2d | %s | VRAM %6d hw | file %6d B' % (name, len(regions), '; '.join(summary) or 'no HScroll BG', vram, len(out))
 
