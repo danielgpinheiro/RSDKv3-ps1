@@ -1214,6 +1214,11 @@ bool RetroEngine::LoadGameConfig(const char *filePath)
         SetGlobalVariableByName("Engine.PlatformId", RETRO_GAMEPLATFORMID);
         SetGlobalVariableByName("Engine.DeviceType", RETRO_GAMEPLATFORM);
 #endif
+#if RETRO_PLATFORM == RETRO_PS1
+        // Tails playable from the start (user decision 2026-10-09). Only the Menu reads the flag (PS001: the save
+        // slots' character choice and icons); its startup sets it from SAVERAM[36] (game completed) and never clears it.
+        SetGlobalVariableByName("Options.TailsUnlocked", 1);
+#endif
 
         // Read SFX
         byte sfxCount = 0;
