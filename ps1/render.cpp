@@ -356,23 +356,57 @@ static int PS1SurfaceSheet(int sheetID)
 struct PS1ClusterCacheEntry {
     int16_t sheet, x, y, index;
 };
-static PS1ClusterCacheEntry s_clusterCache[64];
-static void PS1ClearClusterCache() { memset(s_clusterCache, 0xFF, sizeof(s_clusterCache)); }
+// 256 entries (speed pass 2: the Title's background strips and moving cloud UVs thrashed 64), plus per sheet the
+// cluster found last, tried before the scan when the sheet's clusters don't overlap (then the texel's cluster is unique,
+// the one the scan finds; checked once per sheet and atlas: s_sheetDisjoint).
+#define PS1_CLUSTER_CACHE 256
+static PS1ClusterCacheEntry s_clusterCache[PS1_CLUSTER_CACHE];
+static int16_t s_sheetLast[PS1_ATLAS_MAX_SHEETS];
+static int8_t s_sheetDisjoint[PS1_ATLAS_MAX_SHEETS]; // -1 unknown, 0 overlapping clusters, 1 disjoint
+static void PS1ClearClusterCache()
+{
+    memset(s_clusterCache, 0xFF, sizeof(s_clusterCache));
+    memset(s_sheetLast, 0xFF, sizeof(s_sheetLast));
+    memset(s_sheetDisjoint, 0xFF, sizeof(s_sheetDisjoint));
+}
+static bool PS1SheetDisjoint(int sheet)
+{
+    if (s_sheetDisjoint[sheet] < 0) {
+        const PS1AtlasSheet &sh = g_ps1AtlasSheets[sheet];
+        bool ok                 = true;
+        for (int i = sh.firstCluster; ok && i < sh.firstCluster + sh.clusterCount; ++i)
+            for (int j = i + 1; ok && j < sh.firstCluster + sh.clusterCount; ++j) {
+                const PS1AtlasCluster &a = g_ps1AtlasClusters[i], &b = g_ps1AtlasClusters[j];
+                ok = a.srcX + a.w <= b.srcX || b.srcX + b.w <= a.srcX || a.srcY + a.h <= b.srcY || b.srcY + b.h <= a.srcY;
+            }
+        s_sheetDisjoint[sheet] = ok;
+    }
+    return s_sheetDisjoint[sheet] > 0;
+}
 
 // The cluster holding texel (x, y) of an atlas sheet; nullptr if none, or if it belongs to an on-demand
 // picture not in VRAM yet (queued by PS1AtlasPictureReady: drawn from the next frame on).
 static const PS1AtlasCluster *PS1FindCluster(int sheet, int x, int y)
 {
-    PS1ClusterCacheEntry &e = s_clusterCache[((unsigned)x * 7 + (unsigned)y * 13 + (unsigned)sheet * 31) & 63];
+    PS1ClusterCacheEntry &e = s_clusterCache[((unsigned)x * 7 + (unsigned)y * 13 + (unsigned)sheet * 31) & (PS1_CLUSTER_CACHE - 1)];
     if (e.sheet == sheet && e.x == x && e.y == y) {
         const PS1AtlasCluster *c = &g_ps1AtlasClusters[e.index];
         return !c->picture || PS1AtlasPictureReady(c) ? c : nullptr;
+    }
+    int last = s_sheetLast[sheet];
+    if (last >= 0) {
+        const PS1AtlasCluster &c = g_ps1AtlasClusters[last];
+        if (x >= c.srcX && x < c.srcX + c.w && y >= c.srcY && y < c.srcY + c.h && PS1SheetDisjoint(sheet)) {
+            e = PS1ClusterCacheEntry{ (int16_t)sheet, (int16_t)x, (int16_t)y, (int16_t)last };
+            return !c.picture || PS1AtlasPictureReady(&c) ? &c : nullptr;
+        }
     }
     const PS1AtlasSheet &sh = g_ps1AtlasSheets[sheet];
     for (int i = sh.firstCluster; i < sh.firstCluster + sh.clusterCount; ++i) {
         const PS1AtlasCluster &c = g_ps1AtlasClusters[i];
         if (x >= c.srcX && x < c.srcX + c.w && y >= c.srcY && y < c.srcY + c.h) {
-            e = PS1ClusterCacheEntry{ (int16_t)sheet, (int16_t)x, (int16_t)y, (int16_t)i };
+            e                  = PS1ClusterCacheEntry{ (int16_t)sheet, (int16_t)x, (int16_t)y, (int16_t)i };
+            s_sheetLast[sheet] = (int16_t)i;
             return !c.picture || PS1AtlasPictureReady(&c) ? &c : nullptr;
         }
     }

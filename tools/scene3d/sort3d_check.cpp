@@ -1,4 +1,4 @@
-// Host check (docs/28 phase 2.3): the PS1 merge sort of the 3D draw list (RSDKv3/Scene3D.cpp,
+// Host check (docs/28 phase 2.3; radix sort since speed pass 2): the PS1 sort of the 3D draw list (RSDKv3/Scene3D.cpp,
 // PS1SortDrawList3D) gives exactly upstream's bubble-sort order, on random depths with many ties.
 // Run: tools/scene3d/sort3d_check.sh (extracts the function, builds and runs this).
 #include <cstdio>
@@ -30,9 +30,12 @@ int main() {
     static DrawListEntry3D a[FACEBUFFER_SIZE], b[FACEBUFFER_SIZE];
     int cases = 0;
     for (int n : {0, 1, 2, 3, 7, 64, 159, 160, 161, 256, 1024})
-        for (int range : {1, 3, 50, 100000})
+        for (int range : {1, 3, 50, 100000, 0})
             for (int rep = 0; rep < 200; ++rep, ++cases) {
-                for (int i = 0; i < n; ++i) a[i] = b[i] = {i, rand() % range - range / 2};
+                for (int i = 0; i < n; ++i) // range 0: full 32-bit depths, extremes included
+                    a[i] = b[i] = {i, range ? rand() % range - range / 2
+                                            : (rep & 1) ? (int)((unsigned)rand() << 17 ^ (unsigned)rand() << 3 ^ (unsigned)rand())
+                                                        : (rand() & 1 ? (int)0x80000000 + rand() % 3 : 0x7FFFFFFF - rand() % 3)};
                 bubble(a, n);
                 PS1SortDrawList3D(b, n);
                 if (memcmp(a, b, n * sizeof(*a))) {

@@ -214,6 +214,22 @@ void TransformVertexBuffer()
     if (vertexCount <= 0)
         return;
 
+#if RETRO_PLATFORM == RETRO_PS1
+    // A rotation about the X axis (the Title's clouds, docs/28 speed pass 2) has four zero factors: their terms,
+    // (v * 0) >> 8, are 0 and are left out (the same sums, 5 multiplies a vertex instead of 9).
+    const int(*m)[4] = matFinal.values;
+    if (!m[0][1] && !m[0][2] && !m[1][0] && !m[2][0]) {
+        int m00 = m[0][0], m11 = m[1][1], m12 = m[1][2], m21 = m[2][1], m22 = m[2][2], m30 = m[3][0], m31 = m[3][1], m32 = m[3][2];
+        for (int v = 0; v < vertexCount; ++v) {
+            int vx = vertexBuffer[v].x, vy = vertexBuffer[v].y, vz = vertexBuffer[v].z;
+            Vertex *vert = &vertexBufferT[v];
+            vert->x      = (vx * m00 >> 8) + m30;
+            vert->y      = (vy * m11 >> 8) + (vz * m21 >> 8) + m31;
+            vert->z      = (vy * m12 >> 8) + (vz * m22 >> 8) + m32;
+        }
+        return;
+    }
+#endif
     int inVertexID  = 0;
     int outVertexID = 0;
     do {
@@ -243,20 +259,43 @@ void TransformVerticies(Matrix *matrix, int startIndex, int endIndex)
     } while (++startIndex < endIndex);
 }
 #if RETRO_PLATFORM == RETRO_PS1 || defined(PS1_SORT3D_CHECK)
-// Stable merge sort, descending by depth (ties keep their order, like upstream's bubble sort).
+// Stable descending sort by depth (ties keep their order, like upstream's bubble sort): under 64 entries a merge sort,
+// else an LSD radix sort, 8 bits a pass, over the key ~(depth ^ 0x80000000) (ascending key = descending depth); a pass whose byte is the same for every
+// entry is skipped (docs/28 speed pass 2: the Title's 160 clouds take 1-2 passes instead of a merge sort's ~8).
 void PS1SortDrawList3D(DrawListEntry3D *list, int count)
 {
     static DrawListEntry3D scratch[FACEBUFFER_SIZE];
     DrawListEntry3D *src = list, *dst = scratch;
-    for (int width = 1; width < count; width <<= 1) {
-        for (int lo = 0; lo < count; lo += width << 1) {
-            int mid = lo + width < count ? lo + width : count;
-            int hi  = lo + (width << 1) < count ? lo + (width << 1) : count;
-            int a = lo, b = mid, o = lo;
-            while (a < mid && b < hi) dst[o++] = src[b].depth > src[a].depth ? src[b++] : src[a++];
-            while (a < mid) dst[o++] = src[a++];
-            while (b < hi) dst[o++] = src[b++];
+    if (count < 64) { // a few faces (special-stage backgrounds: 5): a bottom-up merge sort costs less than 256 buckets
+        for (int width = 1; width < count; width <<= 1) {
+            for (int lo = 0; lo < count; lo += width << 1) {
+                int mid = lo + width < count ? lo + width : count;
+                int hi  = lo + (width << 1) < count ? lo + (width << 1) : count;
+                int a = lo, b = mid, o = lo;
+                while (a < mid && b < hi) dst[o++] = src[b].depth > src[a].depth ? src[b++] : src[a++];
+                while (a < mid) dst[o++] = src[a++];
+                while (b < hi) dst[o++] = src[b++];
+            }
+            DrawListEntry3D *t = src;
+            src                = dst;
+            dst                = t;
         }
+        if (src != list)
+            for (int i = 0; i < count; ++i) list[i] = src[i];
+        return;
+    }
+    for (int shift = 0; shift < 32; shift += 8) {
+        int counts[256];
+        for (int b = 0; b < 256; ++b) counts[b] = 0;
+        for (int i = 0; i < count; ++i) ++counts[(~((unsigned)src[i].depth ^ 0x80000000u) >> shift) & 0xFF];
+        if (count && counts[(~((unsigned)src[0].depth ^ 0x80000000u) >> shift) & 0xFF] == count)
+            continue; // every key has this byte: the order stays
+        for (int b = 0, at = 0; b < 256; ++b) {
+            int n     = counts[b];
+            counts[b] = at;
+            at += n;
+        }
+        for (int i = 0; i < count; ++i) dst[counts[(~((unsigned)src[i].depth ^ 0x80000000u) >> shift) & 0xFF]++] = src[i];
         DrawListEntry3D *t = src;
         src                = dst;
         dst                = t;
@@ -277,9 +316,9 @@ void Sort3DDrawList()
 
 #if RETRO_PLATFORM == RETRO_PS1
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the
-    // same order; a bottom-up merge sort does Sonic CD's title (160 faces) in ~1,200 compares instead
-    // of ~12,700 (the bubble sort took 235 hblanks = 0.9 frame, docs/28 phase 2.3). Identical order
-    // checked on the host: tools/scene3d/sort3d_check.sh.
+    // same order: a radix sort (the bubble sort took 235 hblanks = 0.9 frame of the title's 160 faces, docs/28
+    // phase 2.3; a merge sort then ~32, speed pass 2). Identical order checked on the host:
+    // tools/scene3d/sort3d_check.sh.
     PS1SortDrawList3D(drawList3D, faceCount);
     return;
 #endif
@@ -301,7 +340,9 @@ void Draw3DScene(int spriteSheetID)
     Vertex quad[4];
     for (int i = 0; i < faceCount; ++i) {
         Face *face = &faceBuffer[drawList3D[i].faceID];
+#if RETRO_PLATFORM != RETRO_PS1 // PS1: DrawFace / DrawTexturedFace (ps1/render.cpp) read only the fields set below
         memset(quad, 0, 4 * sizeof(Vertex));
+#endif
         switch (face->flags) {
             default: break;
             case FACE_FLAG_TEXTURED_3D:
