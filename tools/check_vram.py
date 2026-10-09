@@ -52,16 +52,18 @@ def main():
     sp = '%s/Stages/%s/BGStrips%s.bin' % (data, stage, '_t' if atlas.endswith('_t') else '')
     if os.path.exists(sp):  # BG line strips (tools/bgstrips): every piece vs its VRAM rectangle
         d = open(sp, 'rb').read()
-        count, = struct.unpack_from('<H', d, 4)
-        off, sbad, spieces = 8 + count * 64, 0, 0
+        count, ncl = struct.unpack_from('<HH', d, 4)  # BGS3: CLUT table (20 B each), regions, texels
+        base = 8 + 20 * ncl
+        off, sbad, spieces = base + count * 64, 0, 0
         for i in range(count):
-            e = d[8 + 64 * i:8 + 64 * (i + 1)]
+            e = d[base + 64 * i:base + 64 * (i + 1)]
             lines, npieces = struct.unpack_from('<H', e, 4)[0], e[8]
+            div = 4 if e[9] else 2  # 4-bit regions: 4 texels a halfword
             for k in range(npieces):
                 x, y, w = struct.unpack_from('<HHH', e, 10 + 6 * k)
-                blk = np.frombuffer(d, '<u2', lines * w // 2, off).reshape(lines, w // 2)
-                off += lines * w
-                sbad += not np.array_equal(vram[y:y + lines, x:x + w // 2], blk)
+                blk = np.frombuffer(d, '<u2', lines * w // div, off).reshape(lines, w // div)
+                off += lines * w // div * 2
+                sbad += not np.array_equal(vram[y:y + lines, x:x + w // div], blk)
                 spieces += 1
         ok &= sbad == 0
         print('strips: %d regions, %d pieces, %d different' % (count, spieces, sbad))

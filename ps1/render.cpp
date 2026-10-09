@@ -95,7 +95,13 @@ volatile uint8_t g_ps1DebugDrawMask   = 0; // bit 0: drop object-list primitives
 
 #define PS1_CLUT_X 0
 #define PS1_CLUT_Y 240
-#define PS1_PAL_ENTRIES (256 + PS1_ATLAS_MAX_CLUTS * 16)
+// BG strips' 4-bit CLUTs (PS1LoadBGStrips): master palette indices like the atlas's, after them in s_pal.
+#define PS1_STRIP_MAX_CLUTS 64
+#define PS1_PAL_STRIP       (256 + PS1_ATLAS_MAX_CLUTS * 16)
+#define PS1_PAL_ENTRIES     (PS1_PAL_STRIP + PS1_STRIP_MAX_CLUTS * 16)
+static PS1AtlasClut s_stripCluts[PS1_STRIP_MAX_CLUTS];
+static int s_stripClutCount   = 0;
+static uint32_t s_stripLoads  = 0; // strip loads (the palette cache rebuilds the CLUTs after one)
 
 static uint16_t s_pal[PS1_PAL_ENTRIES];
 struct PS1PalChunk {
@@ -161,6 +167,7 @@ static bool PS1PalSame(const PaletteEntry *pal) // fullPalette32 is word aligned
 static int s_palBank = -1, s_palFade = -1, s_palFadeA, s_palFadeR, s_palFadeG, s_palFadeB;
 static uint32_t s_palAtlasLoads = 0xFFFFFFFF;
 static int s_palClutCount = -1;
+static uint32_t s_palStripLoads = 0xFFFFFFFF;
 volatile uint32_t g_ps1PalBuilds = 0, g_ps1PalReuses = 0;
 
 static void PS1BuildPalette(int bank)
@@ -169,13 +176,15 @@ static void PS1BuildPalette(int bank)
     int fade = s_fadePending ? 1 : 0;
     if (bank == s_palBank && fade == s_palFade
         && (!fade || (s_fadeA == s_palFadeA && s_fadeR == s_palFadeR && s_fadeG == s_palFadeG && s_fadeB == s_palFadeB))
-        && s_palAtlasLoads == g_ps1AtlasLoads && s_palClutCount == g_ps1AtlasClutCount && PS1PalSame(pal)) {
+        && s_palAtlasLoads == g_ps1AtlasLoads && s_palClutCount == g_ps1AtlasClutCount && s_palStripLoads == s_stripLoads
+        && PS1PalSame(pal)) {
         g_ps1PalReuses = g_ps1PalReuses + 1;
         return;
     }
     g_ps1PalBuilds = g_ps1PalBuilds + 1;
     memcpy(s_palSrc, pal, sizeof(s_palSrc));
     s_palBank = bank, s_palFade = fade, s_palAtlasLoads = g_ps1AtlasLoads, s_palClutCount = g_ps1AtlasClutCount;
+    s_palStripLoads = s_stripLoads;
     s_palFadeA = s_fadeA, s_palFadeR = s_fadeR, s_palFadeG = s_fadeG, s_palFadeB = s_fadeB;
     s_pal[0]                = 0x0000;                          // index 0 = transparent (tiles and sprites)
     if (s_fadePending) {
@@ -189,6 +198,12 @@ static void PS1BuildPalette(int bank)
     for (int k = 0; k < g_ps1AtlasClutCount; ++k) {
         const uint8_t *map = g_ps1AtlasCluts[k].map;
         uint16_t *dst      = &s_pal[256 + k * 16];
+        dst[0]             = 0x0000;
+        for (int i = 1; i < 16; ++i) dst[i] = s_pal[map[i]];
+    }
+    for (int k = 0; k < s_stripClutCount; ++k) {
+        const uint8_t *map = s_stripCluts[k].map;
+        uint16_t *dst      = &s_pal[PS1_PAL_STRIP + k * 16];
         dst[0]             = 0x0000;
         for (int i = 1; i < 16; ++i) dst[i] = s_pal[map[i]];
     }
@@ -224,6 +239,8 @@ static void PS1ReservePaletteRows()
         PS1ReserveRow(256 + k * 16, run * 16, (int16_t)g_ps1AtlasCluts[k].x, (int16_t)g_ps1AtlasCluts[k].y);
         k += run;
     }
+    for (int k = 0; k < s_stripClutCount; ++k)
+        PS1ReserveRow(PS1_PAL_STRIP + k * 16, 16, (int16_t)s_stripCluts[k].x, (int16_t)s_stripCluts[k].y);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1199,13 +1216,14 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
 }
 
 // BG line strips (tools/bgstrips/build_bgstrips.py -> Data/Stages/<Stage>/BGStrips[_t].bin, format
-// there): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period, in VRAM
-// the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
+// there): BG layer lines pre-rendered at build time as 8-bit rows of one horizontal period (4-bit through
+// a CLUT of master palette indices when a region has <= 15 colours), in VRAM the stage's atlas leaves free. A band of lines in a strip region costs 1-3 sprites instead of ~21
 // tiles (per-line parallax would otherwise make one band per line). From the Nexus port.
 #define PS1_STRIP_MAX    64
 #define PS1_STRIP_PIECES 9 // tools/bgstrips MAX_PIECES
 struct PS1StripRegion {
-    uint8_t layer, plane, pieces, pad;
+    uint8_t layer, plane, pieces, clut; // clut: 0 = 8-bit, n = 4-bit through s_stripCluts[n - 1]
+    uint32_t clutWord;                  // the sprites' CLUT field (<< 16)
     uint16_t line0, lines, period;
     uint16_t x[PS1_STRIP_PIECES], y[PS1_STRIP_PIECES], w[PS1_STRIP_PIECES]; // piece VRAM origin (hw) + width (texels)
 };
@@ -1221,6 +1239,8 @@ void PS1LoadBGStrips(const char *folder, int player)
 {
     s_stripCount = 0;
     g_ps1StripRegions = 0;
+    s_stripClutCount  = 0;
+    s_stripLoads      = s_stripLoads + 1;
     memset(s_stripRow, 0, sizeof(s_stripRow));
     char path[96];
     snprintf(path, sizeof(path), "Data/Stages/%s/BGStrips%s.bin", folder, player == 1 ? "_t" : "");
@@ -1228,12 +1248,15 @@ void PS1LoadBGStrips(const char *folder, int player)
     if (!f)
         return; // no HScroll BG strips for this stage: tiles only
     uint8_t head[8];
-    int count = 0;
-    bool ok   = fread(head, 1, 8, f) == 8 && !memcmp(head, "BGS2", 4);
+    int count = 0, cluts = 0;
+    bool ok   = fread(head, 1, 8, f) == 8 && !memcmp(head, "BGS3", 4);
     if (ok) {
         count = head[4] | (head[5] << 8);
-        ok    = count <= PS1_STRIP_MAX;
+        cluts = head[6] | (head[7] << 8);
+        ok    = count <= PS1_STRIP_MAX && cluts <= PS1_STRIP_MAX_CLUTS;
     }
+    static_assert(sizeof(PS1AtlasClut) == 20, "strip clut record = atlas clut record");
+    ok = ok && fread(s_stripCluts, sizeof(PS1AtlasClut), cluts, f) == (size_t)cluts;
     for (int i = 0; ok && i < count; ++i) {
         uint8_t e[10 + 6 * PS1_STRIP_PIECES];
         ok = fread(e, 1, sizeof(e), f) == sizeof(e);
@@ -1244,12 +1267,20 @@ void PS1LoadBGStrips(const char *folder, int player)
         r.lines  = e[4] | (e[5] << 8);
         r.period = e[6] | (e[7] << 8);
         r.pieces = e[8];
+        r.clut   = e[9];
+        {
+            psyqo::PrimPieces::ClutIndex ci(r.clut ? psyqo::Vertex{ { .x = (int16_t)s_stripCluts[r.clut - 1].x, .y = (int16_t)s_stripCluts[r.clut - 1].y } }
+                                                   : psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
+            uint16_t c;
+            memcpy(&c, &ci, 2);
+            r.clutWord = (uint32_t)c << 16;
+        }
         for (int k = 0; k < PS1_STRIP_PIECES; ++k) {
             r.x[k] = e[10 + 6 * k] | (e[11 + 6 * k] << 8);
             r.y[k] = e[12 + 6 * k] | (e[13 + 6 * k] << 8);
             r.w[k] = e[14 + 6 * k] | (e[15 + 6 * k] << 8);
         }
-        ok = ok && r.pieces <= PS1_STRIP_PIECES && r.layer < LAYER_COUNT && r.line0 + r.lines <= TILELAYER_SCROLL_COUNT;
+        ok = ok && r.pieces <= PS1_STRIP_PIECES && r.layer < LAYER_COUNT && r.line0 + r.lines <= TILELAYER_SCROLL_COUNT && r.clut <= cluts;
     }
     const int stagingBytes = 16 * 1024;
     uint8_t *staging       = ok ? (uint8_t *)psyqo_malloc(stagingBytes) : nullptr;
@@ -1259,14 +1290,15 @@ void PS1LoadBGStrips(const char *folder, int player)
         for (int i = 0; ok && i < count; ++i) {
             PS1StripRegion &r = s_strips[i];
             for (int k = 0; ok && k < r.pieces; ++k) {
-                int rowsPerChunk = stagingBytes / r.w[k];
+                int rowBytes     = r.clut ? r.w[k] / 2 : r.w[k];
+                int rowsPerChunk = stagingBytes / rowBytes;
                 for (int row = 0; ok && row < r.lines; row += rowsPerChunk) {
                     int n = r.lines - row < rowsPerChunk ? r.lines - row : rowsPerChunk;
-                    ok    = fread(staging, 1, n * r.w[k], f) == (size_t)(n * r.w[k]);
+                    ok    = fread(staging, 1, n * rowBytes, f) == (size_t)(n * rowBytes);
                     if (ok)
                         g_ps1GPU->uploadToVRAM((const uint16_t *)staging,
-                                               psyqo::Rect{ { (int16_t)r.x[k], (int16_t)(r.y[k] + row) }, { (int16_t)(r.w[k] / 2), (int16_t)n } });
-                    bytes += n * r.w[k];
+                                               psyqo::Rect{ { (int16_t)r.x[k], (int16_t)(r.y[k] + row) }, { (int16_t)(rowBytes / 2), (int16_t)n } });
+                    bytes += n * rowBytes;
                 }
             }
             for (int row = r.line0 >> 4; row < (r.line0 + r.lines) >> 4; ++row) s_stripRow[r.layer][r.plane][row] = (uint8_t)(i + 1);
@@ -1282,6 +1314,7 @@ void PS1LoadBGStrips(const char *folder, int player)
         memset(s_stripRow, 0, sizeof(s_stripRow));
         return;
     }
+    s_stripClutCount  = cluts;
     s_stripCount      = count;
     g_ps1StripRegions = count;
     g_ps1StripBytes   = bytes;
@@ -1480,13 +1513,6 @@ void DrawHLineScrollLayer(int layerID)
     g_ps1ProfLayer[2] = g_ps1ProfLayer[2] + tTiles;
     g_ps1StripBandCount = g_ps1StripBandCount + stripBands;
     uint32_t t2       = PS1Hblanks();
-    static uint32_t s_stripClut = 0;
-    if (!s_stripClut) {
-        psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
-        uint16_t c;
-        memcpy(&c, &clut, 2);
-        s_stripClut = (uint32_t)c << 16;
-    }
     for (int i = 0; i < stripBands;) { // strip bands grouped by region, chained piece by piece
         int region = s_stripBands[i].region, j = i;
         while (j < stripBands && s_stripBands[j].region == region) ++j;
@@ -1495,7 +1521,7 @@ void DrawHLineScrollLayer(int layerID)
         int pos[PS1_STRIP_PIECES], total = 0;
         s_stripWalkCount = 0;
         for (int b = i; b < j; ++b)
-            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, s_stripClut, count);
+            PS1WalkStripBand(r, s_stripBands[b].sy, s_stripBands[b].h, s_stripBands[b].ly, s_stripBands[b].chunkX, r.clutWord, count);
         for (int k = 0; k < r.pieces; ++k) {
             pos[k] = total;
             total += count[k];
@@ -1512,7 +1538,7 @@ void DrawHLineScrollLayer(int layerID)
             if (n <= 0)
                 continue;
             psyqo::PrimPieces::TPageAttr attr;
-            attr.set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
+            attr.set(r.clut ? psyqo::Prim::TPageAttr::ColorMode::Tex4Bits : psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
             attr.setPageX((uint8_t)(r.x[k] >> 6));
             attr.setPageY((uint8_t)(r.y[k] >> 8));
             PS1ChainTPage(attr);
