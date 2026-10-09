@@ -2,6 +2,8 @@
 # A/B of one scene (docs/28 speed pass 2): the reference build (REF commit, default the speed pass 2 kit, built
 # in the git worktree build/refwt; cached per scene in build/perf2/ref/) against the working tree, the same pad
 # script (tools/play/survey.sh pad_for) and frames: both timings, then logic state + framebuffers compared at CHECK.
+# The reference runs boot the reference data's disc (REF_DISC, default build/perf2/refdisc/game.cue: build/game.* as
+# they were before the speed pass patched any bytecode), the new runs build/game.cue.
 # Usage: tools/play/ab_run.sh SCENE[:BOOT_ID] [FROM TO]   (CHECK="600 1100" EMU=ds REBUILD_REF=1 NEW_ONLY=1)
 set -u
 cd "$(dirname "$0")/../.."
@@ -18,7 +20,7 @@ if [ ! -f $R/$tag.ps-exe ] || [ -n "${REBUILD_REF:-}" ]; then
 fi
 sfx=; [ "${EMU:-redux}" = ds ] && sfx=_ds
 if [ -z "${NEW_ONLY:-}" ]; then
-  EXTRA= PAD="$PADS" CHECK="$CHECK" NOBUILD=1 EXE=$R/$tag.ps-exe ELF=$R/$tag.elf tools/play/scene_run.sh $R/$tag$sfx "$SC" $FROM $TO | grep -E "^(RUN|SKIPPED|GUARDS)" | sed 's/^/REF /'
+  EXTRA= DISC=${REF_DISC:-build/perf2/refdisc/game.cue} PAD="$PADS" CHECK="$CHECK" NOBUILD=1 EXE=$R/$tag.ps-exe ELF=$R/$tag.elf tools/play/scene_run.sh $R/$tag$sfx "$SC" $FROM $TO | grep -E "^(RUN|SKIPPED|GUARDS)" | sed 's/^/REF /'
 fi
 rm -f RSDKv3/main.o RSDKv3/RetroEngine.o
 make -j8 BOOT=$scene BOOT_ID=$bid SAMPLE= > $N/$tag.build.log 2>&1 || { echo "NEW BUILD FAIL ($N/$tag.build.log)"; exit 1; }

@@ -502,6 +502,7 @@ const FunctionInfo functions[] = {
     // PS1 extension, only in bytecode rewritten by tools/scripts/patch_bytecode.py (docs/28).
     FunctionInfo("PS1SortDrawList", 2),
     FunctionInfo("PS1DeformRamp", 4),
+    FunctionInfo("PS1ParallaxRamp", 3),
 #endif
 };
 
@@ -932,6 +933,7 @@ enum ScrFunction {
 #if RETRO_PLATFORM == RETRO_PS1
     FUNC_PS1SORTDRAWLIST,
     FUNC_PS1DEFORMRAMP,
+    FUNC_PS1PARALLAXRAMP,
 #endif
     FUNC_MAX_CNT
 };
@@ -4445,6 +4447,30 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     }
                     ++t[0];
                 }
+                break;
+            }
+            case FUNC_PS1PARALLAXRAMP: {
+                // R11A's 3DRamp player-interaction sub adds a ramp to 128 parallax rows every frame, ~1,000 VM
+                // instructions (~119 hblanks, docs/28 speed pass 2):
+                //   while (pos0 < end) { t1 = t0; t1 *= t2; t1 >>= shift; hParallax.scrollPos[pos0] += t1; ++pos0; --t2 }
+                // tools/scripts/patch_bytecode.py swaps that loop's WLower opcode for this one: the operands stay
+                // WLower's (jump table entry, ARRAYPOS0, end) and the body stays in place (its instruction lengths fixed
+                // by the patch's check: Equal 7 words, Mul 7, then ShR's constant 5 words in, operand lengths are the
+                // same in the direct form). The same loop natively, down to the values it leaves (the jump stack slot
+                // WLower would have pushed included), then on to the loop's exit, as WLower's failed test does.
+                opcodeSize = 0;
+                int end = scriptEng.operands[2], shift = scriptCode[scriptCodePtr + 7 + 7 + 5];
+                int *t = scriptEng.tempValue, &p = scriptEng.arrayPosition[0];
+                if (p < end) {
+                    jumpTableStack[jumpTableStackPos + 1] = scriptEng.operands[0];
+                    do {
+                        t[1] = (int)((uint)t[0] * (uint)t[2]) >> shift;
+                        hParallax.scrollPos[p] += t[1];
+                        ++p;
+                        --t[2];
+                    } while (p < end);
+                }
+                scriptCodePtr = scriptCodeStart + jumpTable[jumpTableStart + scriptEng.operands[0] + 1];
                 break;
             }
             case FUNC_PS1DEFORMRAMP: {

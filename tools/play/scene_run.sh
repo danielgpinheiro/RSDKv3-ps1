@@ -11,6 +11,7 @@
 #   CHECK="f1 f2 ..."     at these frames dump the logic state (OUT_state_F.bin: entities, players, script engine,
 #                         globals) and VRAM (OUT_F_vram.bin) for A/B checks (tools/play/ab_compare.py)
 #   EXTRA="gdb lines"     also run at each CHECK frame (\n-separated), e.g. a printf of counters
+#   DISC=path.cue         the disc (default build/game.cue; A/B reference runs use the reference data's disc)
 #   NOBUILD=1             run the EXE as it is (an A/B snapshot: EXE=path ELF=path)
 #   EMU=ds                DuckStation (retail BIOS; only when no other session runs it): timing only
 set -u
@@ -97,7 +98,7 @@ else
   . tools/redux_env.sh
   sed -e "s/\$PORT/$REDUX_PORT/" -e "s/\$WEB/$REDUX_WEB/" "$OUT.gdb.in" > "$OUT.gdb"; mv "$OUT.gdb" "$OUT.gdb.in"
   redux_wait_free
-  "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe "$EXE" >/dev/null 2>&1 &
+  "$REDUX_BIN" $REDUX_ARGS -iso "${DISC:-build/game.cue}" -exe "$EXE" >/dev/null 2>&1 &
   REDUX_PID=$!
   sleep 4
   timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1

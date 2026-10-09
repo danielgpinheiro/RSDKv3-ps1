@@ -15,7 +15,8 @@ PS1 the button opens `Options Menu`, without INSTRUCTIONS:
   - draw: the 4th entry slot is moved off screen (its `Add OBJECTYPOS, 40` -> -1000).
 Special stages (docs/28 special-stage speed): Special Setup's draw sub, a bubble sort of draw list 3 in
 script, becomes one PS1SortDrawList instruction (a PS1 engine opcode running the same loop natively); SS5's
-BGEffects deformation ramp loop becomes PS1DeformRamp.
+BGEffects deformation ramp loop becomes PS1DeformRamp; R11A's 3DRamp parallax ramp loop becomes PS1ParallaxRamp (only
+its WLower opcode changes: speed pass 2).
 Every edit is found by its instruction pattern and checked (count and operands); anything unexpected
 stops the build. Already patched files are recognised and left alone.
 
@@ -286,11 +287,69 @@ def patch_ss_ramp(data):
     return 'deformation ramp native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
+# R11A's 3DRamp: a per-line parallax ramp loop run every frame (docs/28 speed pass 2, ~119 hblanks):
+#   WLower j, ARRAYPOS0, end / Equal T1, T0 / Mul T1, T2 / ShR T1, k / Add HPARALLAXSCROLLPOS[pos0], T1 / Inc ARRAYPOS0
+#   / Dec T2 / loop  ->  only the WLower opcode becomes PS1ParallaxRamp (RSDKv3/Script.cpp: the same loop natively; same
+# operands, the body left in place, so every instruction keeps its position). Found by its full instruction pattern
+# anywhere in a stage file's code.
+PRAMP = [
+    ('WLower', [('int', None), ('var', ('ARRAYPOS0', 0)), ('int', None)]),
+    ('Equal', [('var', ('TEMPVALUE1', 0)), ('var', ('TEMPVALUE0', 0))]),
+    ('Mul', [('var', ('TEMPVALUE1', 0)), ('var', ('TEMPVALUE2', 0))]),
+    ('ShR', [('var', ('TEMPVALUE1', 0)), ('int', None)]),
+    ('Add', [('var', ('HPARALLAXSCROLLPOS', 1, (1, 0))), ('var', ('TEMPVALUE1', 0))]),
+    ('Inc', [('var', ('ARRAYPOS0', 0))]),
+    ('Dec', [('var', ('TEMPVALUE2', 0))]),
+    ('loop', []),
+]
+
+
+def patch_parallax_ramp(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, wlower = nm.index('PS1ParallaxRamp'), nm.index('WLower')
+    bc = os.path.join(data, 'Scripts', 'ByteCode')
+    done, already = [], []
+    for fn in sorted(os.listdir(bc)):
+        if not fn.startswith('RS'):
+            continue
+        path = os.path.join(bc, fn)
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        rest = raw[p:]
+        hits = []
+        for at in range(len(code)):
+            if code[at] not in (wlower, op):
+                continue
+            try:
+                ins = instructions(code, at, names, vars_)[:len(PRAMP)]
+            except (IndexError, KeyError):
+                continue
+            got = [('WLower' if n == 'PS1ParallaxRamp' else n, [(o[0], o[1] if o[0] == 'var' else None) for o in ops]) for _, n, ops in ins]
+            if got != PRAMP:
+                continue
+            # the body's lengths the engine relies on: Equal at +8, Mul at +15, ShR's constant at +8 + 7 + 7 + 5
+            if [a - at for a, _, _ in ins[1:4]] != [8, 15, 22] or ins[3][2][1][2] != at + 27:
+                sys.exit('ERROR patch_bytecode: %s @%d parallax ramp with unexpected operand forms' % (fn, at))
+            hits.append((at, ins[0][1] == 'PS1ParallaxRamp', ins[0][2][2][1], ins[3][2][1][1]))
+        for at, was, end, k in hits:
+            if was:
+                already.append('%s@%d' % (fn, at))
+                continue
+            code[at] = op
+            done.append('%s@%d (to %d, >> %d)' % (fn, at, end, k))
+        if any(not w for _, w, _, _ in hits):
+            open(path, 'wb').write(encode(code) + rest)
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+    return 'parallax ramp native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
     print('SS*.bin: ' + patch_ss_sort(data))
     print('SS*.bin: ' + patch_ss_ramp(data))
+    print('RS*.bin: ' + patch_parallax_ramp(data))
 
 
 if __name__ == '__main__':
