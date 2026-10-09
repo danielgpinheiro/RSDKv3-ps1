@@ -1981,6 +1981,7 @@ void ParseScriptFile(char *scriptName, int scriptID)
 #define PS1_DIRECT_ENTB   3 // byte at &objectEntityList[objectLoop] + offset
 #define PS1_DIRECT_CONST  4 // an int constant (the payload); written back nowhere
 // kind bits: 1 = byte, 2 = from the running entity, 4 = constant (decoded without a switch in ProcessScript)
+#define PS1_DIRECT_LASTWB 8 // on operand 0 only: the write-back ends after it (PS1DirectWriteBackFlag)
 volatile uint32_t g_ps1DirectOperands = 0, g_ps1GenericOperands = 0; // rewritten / left generic by the last walks
 
 // Entity fields with a plain read and write: offset, 1 = byte.
@@ -2073,6 +2074,45 @@ static int PS1DirectOperand(int p)
     return len;
 }
 
+// The write-back (ProcessScript's second operand walk) stores every variable operand again, inputs included. The plain
+// arithmetic opcodes change only operand 0; when every other operand is a constant or a direct operand that cannot share
+// operand 0's storage, storing them again changes nothing (an input aliasing operand 0 is not skipped: upstream stores it
+// after operand 0, so `Add T0, T0` leaves T0 as it was), and operand 0 is flagged: the write-back ends after it.
+static bool PS1DirectRange(const int *c, intptr_t *lo, intptr_t *hi, bool *ent)
+{
+    if (c[0] >= 0 || (c[0] & PS1_DIRECT_CONST))
+        return false;
+    *ent = (c[0] & 2) != 0;
+    *lo  = (intptr_t)c[1]; // signed: entity offsets can be negative (objectLoop - k)
+    *hi  = *lo + ((c[0] & 1) ? 1 : 4);
+    return true;
+}
+static void PS1DirectWriteBackFlag(int op, const int *pos, int n)
+{
+    switch (op) {
+        case FUNC_EQUAL: case FUNC_ADD: case FUNC_SUB: case FUNC_INC: case FUNC_DEC: case FUNC_MUL: case FUNC_DIV: case FUNC_SHR:
+        case FUNC_SHL: case FUNC_AND: case FUNC_OR: case FUNC_XOR: case FUNC_MOD: case FUNC_FLIPSIGN: case FUNC_SIN: case FUNC_COS:
+        case FUNC_SIN256: case FUNC_COS256: case FUNC_SINCHANGE: case FUNC_COSCHANGE: break;
+        default: return;
+    }
+    intptr_t lo0, hi0, lo, hi;
+    bool ent0, ent;
+    int *c0 = &scriptCode[pos[0]];
+    if (n < 1 || !PS1DirectRange(c0, &lo0, &hi0, &ent0))
+        return;
+    const intptr_t eLo = (intptr_t)objectEntityList, eHi = (intptr_t)&objectEntityList[ENTITY_COUNT];
+    for (int j = 1; j < n; ++j) {
+        const int *c = &scriptCode[pos[j]];
+        if (c[0] < 0 && (c[0] & PS1_DIRECT_CONST))
+            continue; // a constant: written back nowhere
+        if (!PS1DirectRange(c, &lo, &hi, &ent))
+            return; // a generic operand: its storage is unknown here
+        if (ent == ent0 ? lo < hi0 && lo0 < hi : (ent ? lo0 >= eLo && lo0 < eHi : lo >= eLo && lo < eHi))
+            return; // may share operand 0's storage (the same entity offset, the same address, or an absolute entity field)
+    }
+    c0[0] |= PS1_DIRECT_LASTWB;
+}
+
 // Walks one sub / function from `start` to its End / EndFunction, rewriting its operands.
 static void PS1DirectOperandsFrom(int start)
 {
@@ -2081,12 +2121,17 @@ static void PS1DirectOperandsFrom(int start)
         int op = scriptCode[p++];
         if ((uint)op >= FUNC_MAX_CNT)
             return;
-        for (int i = 0, n = functions[op].opcodeSize; i < n; ++i) {
+        int pos[16], n = functions[op].opcodeSize;
+        for (int i = 0; i < n; ++i) {
+            if (i < 16)
+                pos[i] = p;
             int len = PS1DirectOperand(p);
             if (len <= 0)
                 return; // not an operand: stop (nothing after it is touched)
             p += len;
         }
+        if (n <= 16)
+            PS1DirectWriteBackFlag(op, pos, n);
         if (op == FUNC_END || op == FUNC_ENDFUNCTION)
             return;
     }
@@ -3197,6 +3242,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
         ObjectScript *scriptInfo = &objectScriptList[objectEntityList[objectLoop].type];
         Entity *entity           = &objectEntityList[objectLoop];
         Player *player           = &playerList[activePlayer];
+#endif
+#if RETRO_PLATFORM == RETRO_PS1
+        int insnEnd = scriptCodePtr; // past the operands (PS1_DIRECT_LASTWB)
 #endif
         SpriteFrame *spriteFrame = nullptr;
 
@@ -4601,6 +4649,10 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                             *(byte *)a = (byte)scriptEng.operands[i];
                         else
                             *(int *)a = scriptEng.operands[i];
+                    }
+                    if (d & PS1_DIRECT_LASTWB) { // nothing after operand 0 needs storing (PS1DirectWriteBackFlag)
+                        scriptCodePtr = insnEnd;
+                        break;
                     }
                     scriptCodePtr += (d >> 4) & 7;
                     continue;
