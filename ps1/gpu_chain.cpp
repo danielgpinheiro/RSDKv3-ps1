@@ -90,6 +90,54 @@ SpriteBatch *s_sbatch = nullptr; // open sprite batch (not yet chained); at most
 uint16_t s_lastTPage = 0xFFFF;  // raw TPageAttr of the last chained TPage (0xFFFF = unknown)
 bool s_tpageValid    = false;
 
+// Links (speed pass 2): psyqo::GPU::chain() for every fragment cost ~25 instructions a call (R41A: ~2,000 fragments,
+// ~46 hblanks a frame). The frame's first fragment still goes to psyqo; each later one is linked here, in the arena,
+// with the word psyqo's chain() writes ((the previous node's size) << 24 | the node's address: every fragment here is
+// at most PS1_CHAIN_MAX_WORDS = 14 words, so psyqo would set neither of its flags), and the run linked so far is handed
+// to psyqo in one chain(first, last) at the frame's end (psyqo then writes the same word into the node before it and
+// takes the run's last node as its tail). The links exist as soon as the next fragment does, as before (the bank
+// replays walk them).
+struct LinkRun {
+    uintptr_t head;
+    size_t getActualFragmentSize() const;
+};
+bool s_lkStarted       = false;   // psyqo holds this frame's first node
+uintptr_t *s_lkTail    = nullptr; // the frame's last node so far (psyqo's tail or the run's)
+uint32_t s_lkTailCount = 0;       // its size << 24 (as psyqo keeps m_chainTailCount)
+uintptr_t *s_runFirst  = nullptr; // the run linked here, not yet handed to psyqo
+uintptr_t *s_runLast   = nullptr;
+size_t s_runLastWords  = 0;
+size_t LinkRun::getActualFragmentSize() const { return s_runLastWords; }
+
+void runFlush() {
+    if (!s_runFirst)
+        return;
+    s_gpu->chain(reinterpret_cast<LinkRun *>(s_runFirst), reinterpret_cast<LinkRun *>(s_runLast));
+    s_runFirst = nullptr;
+}
+
+template <typename Frag1, typename Frag2>
+void linkSpan(Frag1 *first, Frag2 *last) {
+    size_t n0 = first->getActualFragmentSize(), n1 = last->getActualFragmentSize();
+    if (!s_lkStarted) { // the frame's first fragment: psyqo's head (sendChain treats it apart)
+        s_gpu->chain(first, last);
+        s_lkStarted = true;
+    }
+    else {
+        static_assert(PS1_CHAIN_MAX_WORDS <= 14, "linked here only below psyqo's 14-word threshold");
+        (void)n0;
+        *s_lkTail = s_lkTailCount | (reinterpret_cast<uintptr_t>(&first->head) & 0xffffff);
+        if (!s_runFirst)
+            s_runFirst = &first->head;
+        s_runLast      = &last->head;
+        s_runLastWords = n1;
+    }
+    s_lkTail      = &last->head;
+    s_lkTailCount = (uint32_t)n1 << 24;
+}
+template <typename Frag>
+void link(Frag &frag) { linkSpan(&frag, &frag); }
+
 VarFragment *allocVar(unsigned n) {
     if (!s_cur || s_cur + 2 + n > s_end) {
         g_ps1ChainOverflow = g_ps1ChainOverflow + 1;
@@ -116,12 +164,12 @@ T *allocRaw() {
 void flushBatch() {
     if (s_batch) {
         if (s_batch->count)
-            s_gpu->chain(*s_batch);
+            link(*s_batch);
         s_batch = nullptr;
     }
     if (s_sbatch) {
         if (s_sbatch->count)
-            s_gpu->chain(*s_sbatch);
+            link(*s_sbatch);
         s_sbatch = nullptr;
     }
 }
@@ -134,7 +182,7 @@ void chainSimple(const Prim &prim) {
     if (!frag)
         return;
     new (frag) psyqo::Fragments::SimpleFragment<Prim>(prim);
-    s_gpu->chain(*frag);
+    link(*frag);
 }
 
 } // namespace
@@ -172,10 +220,12 @@ void PS1ChainBegin(psyqo::GPU &gpu) {
     s_tpageValid = false;
     s_hook       = nullptr;
     g_ps1ChainReplayWords = 0;
+    s_lkStarted = false, s_lkTail = nullptr, s_runFirst = nullptr;
 }
 
 void PS1ChainEnd() {
     flushBatch();
+    runFlush();
     uint32_t used = (uint32_t)(s_cur - s_base);
     g_ps1ChainLastWords = used;
     if (used > g_ps1ChainHighWater)
@@ -221,7 +271,7 @@ psyqo::Prim::FastFill *PS1ChainClear(uint8_t r, uint8_t g, uint8_t b) {
         return nullptr;
     new (frag) psyqo::Fragments::SimpleFragment<psyqo::Prim::FastFill>();
     s_gpu->getNextClear(frag->primitive, psyqo::Color{{.r = r, .g = g, .b = b}});
-    s_gpu->chain(*frag);
+    link(*frag);
     return &frag->primitive;
 }
 
@@ -237,7 +287,7 @@ void PS1ChainUploadRow(const uint16_t *data, int count, int16_t x, int16_t y) {
         fr->upload.region = psyqo::Rect{{(int16_t)(x + off), y}, {(int16_t)n, 1}};
         memcpy(fr->data, data + off, n * sizeof(uint16_t));
         fr->words = (unsigned)(sizeof(psyqo::Prim::VRAMUpload) / 4 + n / 2); // n is even
-        s_gpu->chain(*fr);
+        link(*fr);
     }
 }
 
@@ -253,7 +303,7 @@ int PS1ChainReserveRow(int count, int16_t x, int16_t y, uint16_t **chunkData, ui
         new (&fr->upload) psyqo::Prim::VRAMUpload();
         fr->upload.region = psyqo::Rect{{(int16_t)(x + off), y}, {(int16_t)n, 1}};
         fr->words         = (unsigned)(sizeof(psyqo::Prim::VRAMUpload) / 4 + n / 2); // n is even
-        s_gpu->chain(*fr);
+        link(*fr);
         chunkData[chunks] = fr->data;
         chunkLen[chunks]  = (uint16_t)n;
         ++chunks;
@@ -370,7 +420,7 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
             w[2] = *tex++;
             w += 3;
         }
-        s_gpu->chain(*f);
+        link(*f);
         n -= k;
     }
 }
@@ -399,7 +449,7 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n) {
             w += 4;
             words += 3;
         }
-        s_gpu->chain(*f);
+        link(*f);
         n -= k;
     }
 }
@@ -416,7 +466,7 @@ uint32_t *PS1ChainRawBegin(int words) {
 
 void PS1ChainRawEnd() {
     if (s_rawFrag)
-        s_gpu->chain(*s_rawFrag);
+        link(*s_rawFrag);
     s_rawFrag    = nullptr;
     s_tpageValid = false;
 }
@@ -453,7 +503,7 @@ void PS1ChainBulkEnd(int used) {
     uint32_t *h = s_bulk;
     for (int k = 0; k < used - 1; ++k, h += stride) // DMA linked-list headers: size << 24 | next packet address
         *h = size | (reinterpret_cast<uintptr_t>(h + stride) & 0xffffff);
-    s_gpu->chain(reinterpret_cast<BulkFrag *>(s_bulk), reinterpret_cast<BulkFrag *>(h));
+    linkSpan(reinterpret_cast<BulkFrag *>(s_bulk), reinterpret_cast<BulkFrag *>(h));
     s_cur        = s_bulk + used * stride;
     s_bulk       = nullptr;
     s_tpageValid = false;
@@ -471,7 +521,7 @@ void PS1ChainPrimsRawN(const uint32_t *words, int wpp, int n) {
         if (!f)
             return;
         memcpy(f->data, words, wpp * k * 4);
-        s_gpu->chain(*f);
+        link(*f);
         words += wpp * k;
         n -= k;
     }
@@ -523,7 +573,7 @@ int PS1ChainReplay(uint32_t *from, uint32_t *to) {
             if (!f)
                 break;
             memcpy(f->data, p + 1, n * 4);
-            s_gpu->chain(*f);
+            link(*f);
             words += n + 1;
         }
         p = next;
@@ -590,7 +640,7 @@ int PS1ChainReplayLines(uint32_t *from, uint32_t *to, int y0, int y1) {
             if (!f)
                 break;
             memcpy(f->data, p + 1, n * 4);
-            s_gpu->chain(*f);
+            link(*f);
             words += n + 1;
         }
         p = next;
