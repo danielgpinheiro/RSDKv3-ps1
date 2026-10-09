@@ -2231,6 +2231,20 @@ static void PS1Draw3DFloor(int layerID)
         // marks a corner too near for the GTE divide.
         uint32_t *rowA = reinterpret_cast<uint32_t *>(0x1F800000), *rowB = rowA + PS1_FLOOR_GRID;
         uint32_t *prev = rowA, *cur = rowB;
+        // Vertex outcodes (speed pass 2, after the Mania UFO floor): per corner, bit 0 x < 0, 1 x >= 320, 2 y < the first
+        // floor row, 3 y >= 240, 4 too near (0x7FFF), 5 x outside [-352, 671], 6 y outside [-136, 375]. A tile is off
+        // screen when its four codes AND to a side bit, skipped when they OR to 4; the 1023 x 511 GPU limit can only be
+        // passed when they OR to bit 5 or 6 (else the corners span at most 1023 x 511), and only then is it tested.
+        static uint8_t s_floorOc[2][PS1_FLOOR_GRID];
+        uint8_t *ocPrev = s_floorOc[0], *ocCur = s_floorOc[1];
+        int yTop = 128 + iNear;
+        auto outcode = [&](uint32_t v) -> uint8_t {
+            if (v == 0x7FFF)
+                return 16;
+            int x = (int16_t)v, y = (int32_t)v >> 16;
+            return (uint8_t)((x < 0) | (x >= SCREEN_XSIZE) << 1 | (y < yTop) << 2 | (y >= SCREEN_YSIZE) << 3
+                             | ((unsigned)(x + 352) > 1023u) << 5 | ((unsigned)(y + 136) > 511u) << 6);
+        };
         using namespace psyqo::GTE;
         write<Register::R11R12, Unsafe>((uint32_t)(uint16_t)(int16_t)-cs);
         write<Register::R13R21, Unsafe>((uint32_t)(uint16_t)(int16_t)sn);
@@ -2247,7 +2261,7 @@ static void PS1Draw3DFloor(int layerID)
         // GTE (psx-spx "GTE Coordinate Calculation Commands", RTPT): camera frame = rotation by the floor
         // angle, lateral l along (-cos, sin), forward f along (sin, cos); vertex (dx, 0, dz) * S, TRY = K S / 192,
         // H = 192, offsets (160, 128): SX = 160 + l * 192 / f, SY = 128 + (K / 192) * 192 / f = 128 + K / f.
-        auto project = [&](uint32_t *row, int wz, int ta, int tb) {
+        auto project = [&](uint32_t *row, uint8_t *oc, int wz, int ta, int tb) {
             int dz = wz * PS1_FLOOR_S - camZs;
             dz     = dz < -32767 ? -32767 : dz > 32767 ? 32767 : dz;
             for (int tx = ta; tx <= tb + 1; tx += 3) {
@@ -2270,21 +2284,22 @@ static void PS1Draw3DFloor(int layerID)
                 v[0] = (z1 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s0;
                 v[1] = (z2 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s1;
                 v[2] = (z3 & 0xFFFF) < PS1_FLOOR_SZMIN ? 0x7FFF : s2;
+                uint8_t *o = &oc[tx - gx0];
+                o[0] = outcode(v[0]), o[1] = outcode(v[1]), o[2] = outcode(v[2]);
             }
         };
         PS1ChainDrawArea(0, 128 + iNear, SCREEN_XSIZE, SCREEN_YSIZE);
-        int yTop = 128 + iNear;
         int taPrev, tbPrev, ta, tb, taNext, tbNext;
         rowRange(tz0 << 4, (tz0 << 4) + 16, ta, tb);
         rowRange((tz0 << 4) - 16, tz0 << 4, taPrev, tbPrev);
         // top vertex row of the first tile row: covers this and the (empty) previous tile row
-        project(prev, tz0 << 4, ta < taPrev ? ta : taPrev, tb > tbPrev ? tb : tbPrev);
+        project(prev, ocPrev, tz0 << 4, ta < taPrev ? ta : taPrev, tb > tbPrev ? tb : tbPrev);
         for (int tz = tz0; tz <= tz1 && quads < PS1_FLOOR_MAX_QUADS; ++tz) {
             rowRange((tz + 1) << 4, ((tz + 1) << 4) + 16, taNext, tbNext);
             int ua = ta < taNext ? ta : taNext, ub = tb > tbNext ? tb : tbNext;
             if (ub + 2 - gx0 > PS1_FLOOR_GRID)
                 ub = gx0 + PS1_FLOOR_GRID - 2;
-            project(cur, (tz + 1) << 4, ua, ub);
+            project(cur, ocCur, (tz + 1) << 4, ua, ub);
             const ushort *chunkRow = &layer->tiles[(tz >> 3) << 8];
             int te = tb + 1 - gx0 > PS1_FLOOR_GRID - 1 ? gx0 + PS1_FLOOR_GRID - 2 : tb;
             if (te - ta + 1 > PS1_FLOOR_MAX_QUADS - quads)
@@ -2296,16 +2311,20 @@ static void PS1Draw3DFloor(int layerID)
             int rowQuads = 0;
             for (int tx = ta; tx <= te; ++tx) {
                 ++cand;
+                int oA = ocPrev[tx - gx0], oB = ocPrev[tx - gx0 + 1], oC = ocCur[tx - gx0], oD = ocCur[tx - gx0 + 1];
+                int any = oA | oB | oC | oD;
+                if ((any & 16) || (oA & oB & oC & oD & 15))
+                    continue; // a corner under 12 px ahead (the whole tile is below the screen), or all off one side
                 uint32_t A = prev[tx - gx0], B = prev[tx - gx0 + 1], C = cur[tx - gx0], D = cur[tx - gx0 + 1];
-                if (A == 0x7FFF || B == 0x7FFF || C == 0x7FFF || D == 0x7FFF)
-                    continue; // a corner under 12 px ahead: the whole tile is below the screen
-                int ax = (int16_t)A, bx = (int16_t)B, cx = (int16_t)C, dx = (int16_t)D;
-                int ay = (int32_t)A >> 16, by = (int32_t)B >> 16, cy = (int32_t)C >> 16, dy = (int32_t)D >> 16;
-                int x0 = ax < bx ? ax : bx, x1 = ax < bx ? bx : ax, y0 = ay < by ? ay : by, y1 = ay < by ? by : ay;
-                x0 = cx < x0 ? cx : x0, x1 = cx > x1 ? cx : x1, y0 = cy < y0 ? cy : y0, y1 = cy > y1 ? cy : y1;
-                x0 = dx < x0 ? dx : x0, x1 = dx > x1 ? dx : x1, y0 = dy < y0 ? dy : y0, y1 = dy > y1 ? dy : y1;
-                if (x1 < 0 || x0 >= SCREEN_XSIZE || y1 < yTop || y0 >= SCREEN_YSIZE || x1 - x0 > 1023 || y1 - y0 > 511)
-                    continue;
+                if (any & 96) { // a corner far out: the GPU's 1023 x 511 limit, tested exactly
+                    int ax = (int16_t)A, bx = (int16_t)B, cx = (int16_t)C, dx = (int16_t)D;
+                    int ay = (int32_t)A >> 16, by = (int32_t)B >> 16, cy = (int32_t)C >> 16, dy = (int32_t)D >> 16;
+                    int x0 = ax < bx ? ax : bx, x1 = ax < bx ? bx : ax, y0 = ay < by ? ay : by, y1 = ay < by ? by : ay;
+                    x0 = cx < x0 ? cx : x0, x1 = cx > x1 ? cx : x1, y0 = cy < y0 ? cy : y0, y1 = cy > y1 ? cy : y1;
+                    x0 = dx < x0 ? dx : x0, x1 = dx > x1 ? dx : x1, y0 = dy < y0 ? dy : y0, y1 = dy > y1 ? dy : y1;
+                    if (x1 - x0 > 1023 || y1 - y0 > 511)
+                        continue;
+                }
                 uint16_t tv = s_tileVis[(chunkRow[tx >> 3] << 6) + (tx & 7) + ((tz & 7) << 3)];
                 if (!(tv & PS1_TV_SOLID))
                     continue;
@@ -2333,6 +2352,9 @@ static void PS1Draw3DFloor(int layerID)
             if (q)
                 PS1ChainBulkEnd(rowQuads);
             quads += rowQuads;
+            uint8_t *otmp = ocPrev;
+            ocPrev        = ocCur;
+            ocCur         = otmp;
             uint32_t *tmp = prev;
             prev          = cur;
             cur           = tmp;
