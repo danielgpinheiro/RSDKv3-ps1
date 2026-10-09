@@ -1,5 +1,5 @@
 #!/bin/bash
-# A/B of one scene (docs/28 speed pass 2): the reference build (REF commit, default the speed pass 2 kit 9ea8b98, built
+# A/B of one scene (docs/28 speed pass 2): the reference build (REF commit, default the speed pass 2 kit, built
 # in the git worktree build/refwt; cached per scene in build/perf2/ref/) against the working tree, the same pad
 # script (tools/play/survey.sh pad_for) and frames: both timings, then logic state + framebuffers compared at CHECK.
 # Usage: tools/play/ab_run.sh SCENE[:BOOT_ID] [FROM TO]   (CHECK="600 1100" EMU=ds REBUILD_REF=1 NEW_ONLY=1)
@@ -7,7 +7,7 @@ set -u
 cd "$(dirname "$0")/../.."
 SC=$1; FROM=${2:-300}; TO=${3:-1200}; CHECK=${CHECK:-600 1100}
 scene=${SC%%:*}; bid=; [ "$SC" != "$scene" ] && bid=${SC#*:}; tag=${SC//:/_}
-REF=${REF:-9ea8b98}
+REF=${REF:-b6ccce6}
 R=build/perf2/ref; N=build/perf2/new; mkdir -p $R $N
 eval "$(sed -n '/^act_pad()/p;/^ss_pad()/p;/^pad_for()/,/^}/p' tools/play/survey.sh)"
 PADS="$(pad_for $scene)"
@@ -18,7 +18,7 @@ if [ ! -f $R/$tag.ps-exe ] || [ -n "${REBUILD_REF:-}" ]; then
 fi
 sfx=; [ "${EMU:-redux}" = ds ] && sfx=_ds
 if [ -z "${NEW_ONLY:-}" ]; then
-  PAD="$PADS" CHECK="$CHECK" NOBUILD=1 EXE=$R/$tag.ps-exe ELF=$R/$tag.elf tools/play/scene_run.sh $R/$tag$sfx "$SC" $FROM $TO | grep -E "^(RUN|SKIPPED|GUARDS)" | sed 's/^/REF /'
+  EXTRA= PAD="$PADS" CHECK="$CHECK" NOBUILD=1 EXE=$R/$tag.ps-exe ELF=$R/$tag.elf tools/play/scene_run.sh $R/$tag$sfx "$SC" $FROM $TO | grep -E "^(RUN|SKIPPED|GUARDS)" | sed 's/^/REF /'
 fi
 rm -f RSDKv3/main.o RSDKv3/RetroEngine.o
 make -j8 BOOT=$scene BOOT_ID=$bid SAMPLE= > $N/$tag.build.log 2>&1 || { echo "NEW BUILD FAIL ($N/$tag.build.log)"; exit 1; }

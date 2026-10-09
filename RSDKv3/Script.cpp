@@ -1957,6 +1957,149 @@ void ParseScriptFile(char *scriptName, int scriptID)
 
 #endif
 
+#if RETRO_PLATFORM == RETRO_PS1
+// Direct operands (docs/28 speed pass 2). The VM decodes every variable operand twice per instruction (fetch, then
+// write-back): its kind, its array form, then a switch over ~200 variables. Most operands are plain storage: the
+// temp values, the check result, the array positions, a global with a constant index, or a field of the current
+// entity (or of the entity a constant away). After a bytecode load those operands are rewritten in place into a
+// direct form that keeps their length (jump offsets unchanged): word 0 = PS1_DIRECT | length << 4 | kind, word 1 =
+// an address (absolute kinds), a byte offset from &objectEntityList[objectLoop] (entity kinds) or the value (int
+// constants, which take the same fast path). ProcessScript
+// reads / writes them with one load / store. Exact: only variables whose read is the field and whose write-back is
+// the plain store of the same field are converted (int fields as int, byte fields as byte), with the address the
+// generic path computes; the rest keeps the generic path. Only code reached by walking each sub / function from its
+// start up to its End is rewritten (build-time patches leave dead code after an End), and a rewritten operand is
+// recognised and skipped on a second walk.
+#define PS1_DIRECT        ((int)0x80000000)
+#define PS1_DIRECT_ABSI   0 // int at an absolute address
+#define PS1_DIRECT_ABSB   1 // byte at an absolute address
+#define PS1_DIRECT_ENTI   2 // int at &objectEntityList[objectLoop] + offset
+#define PS1_DIRECT_ENTB   3 // byte at &objectEntityList[objectLoop] + offset
+#define PS1_DIRECT_CONST  4 // an int constant (the payload); written back nowhere
+volatile uint32_t g_ps1DirectOperands = 0, g_ps1GenericOperands = 0; // rewritten / left generic by the last walks
+
+// Entity fields with a plain read and write: offset, 1 = byte.
+static bool PS1EntityField(int var, int *offset, int *isByte)
+{
+    *isByte = 0;
+    switch (var) {
+        case VAR_OBJECTXPOS: *offset = offsetof(Entity, XPos); return true;
+        case VAR_OBJECTYPOS: *offset = offsetof(Entity, YPos); return true;
+        case VAR_OBJECTVALUE0: case VAR_OBJECTVALUE1: case VAR_OBJECTVALUE2: case VAR_OBJECTVALUE3:
+        case VAR_OBJECTVALUE4: case VAR_OBJECTVALUE5: case VAR_OBJECTVALUE6: case VAR_OBJECTVALUE7:
+            *offset = offsetof(Entity, values) + 4 * (var - VAR_OBJECTVALUE0);
+            return true;
+        case VAR_OBJECTSCALE: *offset = offsetof(Entity, scale); return true;
+        case VAR_OBJECTROTATION: *offset = offsetof(Entity, rotation); return true;
+        case VAR_OBJECTANIMATIONTIMER: *offset = offsetof(Entity, animationTimer); return true;
+        case VAR_OBJECTANIMATIONSPEED: *offset = offsetof(Entity, animationSpeed); return true;
+        default: break;
+    }
+    *isByte = 1;
+    switch (var) {
+        case VAR_OBJECTTYPE: *offset = offsetof(Entity, type); return true;
+        case VAR_OBJECTPROPERTYVALUE: *offset = offsetof(Entity, propertyValue); return true;
+        case VAR_OBJECTSTATE: *offset = offsetof(Entity, state); return true;
+        case VAR_OBJECTPRIORITY: *offset = offsetof(Entity, priority); return true;
+        case VAR_OBJECTDRAWORDER: *offset = offsetof(Entity, drawOrder); return true;
+        case VAR_OBJECTDIRECTION: *offset = offsetof(Entity, direction); return true;
+        case VAR_OBJECTINKEFFECT: *offset = offsetof(Entity, inkEffect); return true;
+        case VAR_OBJECTALPHA: *offset = offsetof(Entity, alpha); return true;
+        case VAR_OBJECTFRAME: *offset = offsetof(Entity, frame); return true;
+        case VAR_OBJECTANIMATION: *offset = offsetof(Entity, animation); return true;
+        case VAR_OBJECTPREVANIMATION: *offset = offsetof(Entity, prevAnimation); return true;
+        default: break;
+    }
+    return false;
+}
+static_assert(sizeof(((Entity *)0)->type) == 1 && sizeof(((Entity *)0)->frame) == 1 && sizeof(((Entity *)0)->XPos) == 4,
+              "direct operand field widths");
+
+// Rewrites the operand at code[p] if it qualifies; returns its length (words).
+static int PS1DirectOperand(int p)
+{
+    int *c = &scriptCode[p];
+    if (c[0] < 0)
+        return (c[0] >> 4) & 7; // already direct
+    if (c[0] == SCRIPTVAR_INTCONST) {
+        c[0] = PS1_DIRECT | (2 << 4) | PS1_DIRECT_CONST;
+        g_ps1DirectOperands = g_ps1DirectOperands + 1;
+        return 2;
+    }
+    if (c[0] == SCRIPTVAR_STRCONST)
+        return c[1] / 4 + 3;
+    if (c[0] != SCRIPTVAR_VAR)
+        return -1;
+    int arr = c[1], len = 3, reg = 0, idx = 0;
+    if (arr == VARARR_ARRAY || arr == VARARR_ENTNOPLUS1 || arr == VARARR_ENTNOMINUS1)
+        reg = c[2] == 1, idx = c[3], len = 5;
+    else if (arr != VARARR_NONE)
+        return -1;
+    int var = c[len - 1], kind = -1, pay = 0, off, isByte;
+    switch (var) {
+        case VAR_TEMPVALUE0: case VAR_TEMPVALUE1: case VAR_TEMPVALUE2: case VAR_TEMPVALUE3:
+        case VAR_TEMPVALUE4: case VAR_TEMPVALUE5: case VAR_TEMPVALUE6: case VAR_TEMPVALUE7:
+            kind = PS1_DIRECT_ABSI, pay = (int)(intptr_t)&scriptEng.tempValue[var - VAR_TEMPVALUE0];
+            break;
+        case VAR_CHECKRESULT: kind = PS1_DIRECT_ABSI, pay = (int)(intptr_t)&scriptEng.checkResult; break;
+        case VAR_ARRAYPOS0: kind = PS1_DIRECT_ABSI, pay = (int)(intptr_t)&scriptEng.arrayPosition[0]; break;
+        case VAR_ARRAYPOS1: kind = PS1_DIRECT_ABSI, pay = (int)(intptr_t)&scriptEng.arrayPosition[1]; break;
+        case VAR_GLOBAL: // globalVariables[arrayVal]: a constant index only
+            if (arr == VARARR_ARRAY && !reg)
+                kind = PS1_DIRECT_ABSI, pay = (int)(intptr_t)&globalVariables[idx];
+            break;
+        default:
+            if (!PS1EntityField(var, &off, &isByte) || reg)
+                break;
+            if (arr == VARARR_ARRAY) // objectEntityList[idx]
+                kind = isByte ? PS1_DIRECT_ABSB : PS1_DIRECT_ABSI, pay = (int)(intptr_t)((char *)&objectEntityList[idx] + off);
+            else // objectEntityList[objectLoop (+ / - idx)]
+                kind = isByte ? PS1_DIRECT_ENTB : PS1_DIRECT_ENTI,
+                pay = off + (arr == VARARR_ENTNOPLUS1 ? idx : arr == VARARR_ENTNOMINUS1 ? -idx : 0) * (int)sizeof(Entity);
+            break;
+    }
+    if (kind < 0) {
+        g_ps1GenericOperands = g_ps1GenericOperands + 1;
+        return len;
+    }
+    c[0] = PS1_DIRECT | (len << 4) | kind;
+    c[1] = pay;
+    g_ps1DirectOperands = g_ps1DirectOperands + 1;
+    return len;
+}
+
+// Walks one sub / function from `start` to its End / EndFunction, rewriting its operands.
+static void PS1DirectOperandsFrom(int start)
+{
+    int p = start;
+    while (p >= 0 && p < scriptCodePos) {
+        int op = scriptCode[p++];
+        if ((uint)op >= FUNC_MAX_CNT)
+            return;
+        for (int i = 0, n = functions[op].opcodeSize; i < n; ++i) {
+            int len = PS1DirectOperand(p);
+            if (len <= 0)
+                return; // not an operand: stop (nothing after it is touched)
+            p += len;
+        }
+        if (op == FUNC_END || op == FUNC_ENDFUNCTION)
+            return;
+    }
+}
+
+static void PS1DirectOperandsLoad(int scriptID, int scriptCount, int functionCount)
+{
+    for (int s = 0; s < scriptCount; ++s) {
+        ObjectScript *script = &objectScriptList[scriptID + s];
+        PS1DirectOperandsFrom(script->subMain.scriptCodePtr);
+        PS1DirectOperandsFrom(script->subPlayerInteraction.scriptCodePtr);
+        PS1DirectOperandsFrom(script->subDraw.scriptCodePtr);
+        PS1DirectOperandsFrom(script->subStartup.scriptCodePtr);
+    }
+    for (int f = 0; f < functionCount; ++f) PS1DirectOperandsFrom(scriptFunctionList[f].ptr.scriptCodePtr);
+}
+#endif
+
 void LoadBytecode(int stageListID, int scriptID)
 {
     char scriptPath[0x40];
@@ -2221,6 +2364,7 @@ void LoadBytecode(int stageListID, int scriptID)
             for (int i = 0; i < 4; ++i) PS1FixScriptPtr(subs[i]);
         }
         for (int f = 0; f < functionCount; ++f) PS1FixScriptPtr(&scriptFunctionList[f].ptr);
+        PS1DirectOperandsLoad(scriptID, scriptCount, functionCount);
 #endif
 
         CloseFile();
@@ -2296,6 +2440,10 @@ void ClearScriptData()
 
 #if PS1_SAMPLE
 volatile int32_t g_ps1ScriptPC = 0; // the instruction ProcessScript runs (scriptCode index), 0 outside (ps1/pc_sampler.cpp)
+volatile uint32_t g_ps1ScriptOps = 0; // VM instructions run (SAMPLE builds)
+volatile uint32_t g_ps1ScriptCalls = 0; // ProcessScript calls (SAMPLE builds)
+volatile uint32_t g_ps1ScriptOpdDirect = 0, g_ps1ScriptOpdVar = 0, g_ps1ScriptOpdConst = 0; // fetched operands (SAMPLE builds)
+volatile uint32_t g_ps1ScriptVarHist[VAR_MAX_CNT] = {}; // generic variable operands fetched, per variable (SAMPLE builds)
 #endif
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 {
@@ -2304,9 +2452,13 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 
     jumpTableStackPos = 0;
     functionStackPos  = 0;
+#if PS1_SAMPLE
+    g_ps1ScriptCalls = g_ps1ScriptCalls + 1;
+#endif
     while (running) {
 #if PS1_SAMPLE
-        g_ps1ScriptPC = scriptCodePtr;
+        g_ps1ScriptPC  = scriptCodePtr;
+        g_ps1ScriptOps = g_ps1ScriptOps + 1;
 #endif
         int opcode           = scriptCode[scriptCodePtr++];
 #if RETRO_PLATFORM == RETRO_PS1
@@ -2320,6 +2472,26 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 
         // Get Values
         for (int i = 0; i < opcodeSize; ++i) {
+#if RETRO_PLATFORM == RETRO_PS1
+            {
+                int d = scriptCode[scriptCodePtr];
+                if (d < 0) { // direct operand (PS1DirectOperand)
+#if PS1_SAMPLE
+                    g_ps1ScriptOpdDirect = g_ps1ScriptOpdDirect + 1;
+#endif
+                    int pay = scriptCode[scriptCodePtr + 1];
+                    switch (d & 7) {
+                        case PS1_DIRECT_ABSI: scriptEng.operands[i] = *(int *)(intptr_t)pay; break;
+                        case PS1_DIRECT_ABSB: scriptEng.operands[i] = *(byte *)(intptr_t)pay; break;
+                        case PS1_DIRECT_ENTI: scriptEng.operands[i] = *(int *)((char *)&objectEntityList[objectLoop] + pay); break;
+                        case PS1_DIRECT_ENTB: scriptEng.operands[i] = *(byte *)((char *)&objectEntityList[objectLoop] + pay); break;
+                        default: scriptEng.operands[i] = pay; break;
+                    }
+                    scriptCodePtr += (d >> 4) & 7;
+                    continue;
+                }
+            }
+#endif
             int opcodeType = scriptCode[scriptCodePtr++];
 
             if (opcodeType == SCRIPTVAR_VAR) {
@@ -2348,6 +2520,11 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 }
 
                 // Variables
+#if PS1_SAMPLE
+                g_ps1ScriptOpdVar = g_ps1ScriptOpdVar + 1;
+                if ((uint)scriptCode[scriptCodePtr] < VAR_MAX_CNT)
+                    g_ps1ScriptVarHist[scriptCode[scriptCodePtr]] = g_ps1ScriptVarHist[scriptCode[scriptCodePtr]] + 1;
+#endif
                 switch (scriptCode[scriptCodePtr++]) {
                     default: break;
                     case VAR_TEMPVALUE0: scriptEng.operands[i] = scriptEng.tempValue[0]; break;
@@ -2975,6 +3152,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 }
             }
             else if (opcodeType == SCRIPTVAR_INTCONST) { // int constant
+#if PS1_SAMPLE
+                g_ps1ScriptOpdConst = g_ps1ScriptOpdConst + 1;
+#endif
                 scriptEng.operands[i] = scriptCode[scriptCodePtr++];
             }
             else if (opcodeType == SCRIPTVAR_STRCONST) { // string constant
@@ -2997,9 +3177,18 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
             }
         }
 
+#if RETRO_PLATFORM == RETRO_PS1
+        // Computed where an opcode uses them (docs/28 speed pass 2: ~30 instructions a VM instruction when computed for
+        // every opcode): no opcode changes objectLoop, activePlayer or the running entity's type before using them, and
+        // the write-back below never uses them, so each use sees the value the upstream definitions give.
+#define scriptInfo (&objectScriptList[objectEntityList[objectLoop].type])
+#define entity     (&objectEntityList[objectLoop])
+#define player     (&playerList[activePlayer])
+#else
         ObjectScript *scriptInfo = &objectScriptList[objectEntityList[objectLoop].type];
         Entity *entity           = &objectEntityList[objectLoop];
         Player *player           = &playerList[activePlayer];
+#endif
         SpriteFrame *spriteFrame = nullptr;
 
         // Functions
@@ -4295,10 +4484,32 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 #endif
         }
 
+#if RETRO_PLATFORM == RETRO_PS1
+#undef scriptInfo
+#undef entity
+#undef player
+#endif
         // Set Values
         if (opcodeSize > 0)
             scriptCodePtr -= scriptCodePtr - scriptCodeOffset;
         for (int i = 0; i < opcodeSize; ++i) {
+#if RETRO_PLATFORM == RETRO_PS1
+            {
+                int d = scriptCode[scriptCodePtr];
+                if (d < 0) { // direct operand (PS1DirectOperand)
+                    int pay = scriptCode[scriptCodePtr + 1];
+                    switch (d & 7) {
+                        case PS1_DIRECT_ABSI: *(int *)(intptr_t)pay = scriptEng.operands[i]; break;
+                        case PS1_DIRECT_ABSB: *(byte *)(intptr_t)pay = (byte)scriptEng.operands[i]; break;
+                        case PS1_DIRECT_ENTI: *(int *)((char *)&objectEntityList[objectLoop] + pay) = scriptEng.operands[i]; break;
+                        case PS1_DIRECT_ENTB: *(byte *)((char *)&objectEntityList[objectLoop] + pay) = (byte)scriptEng.operands[i]; break;
+                        default: break; // a constant
+                    }
+                    scriptCodePtr += (d >> 4) & 7;
+                    continue;
+                }
+            }
+#endif
             int opcodeType = scriptCode[scriptCodePtr++];
             if (opcodeType == SCRIPTVAR_VAR) {
                 int arrayVal = 0;
