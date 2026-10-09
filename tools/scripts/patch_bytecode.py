@@ -569,6 +569,49 @@ def patch_save_objects(data):
     return 'object save loop native in - (not found)'
 
 
+# The Title's Background draw sub: its water-strip loop (docs/28 speed pass 2). Only the WLower opcode becomes
+# PS1TitleWater (RSDKv3/Script.cpp); the whole loop is checked, including the IfGreater entry the engine writes (2).
+def title_water():
+    A = lambda n: ('var', (n, 1, (1, 0)))  # OBJECTXPOS[pos0]
+    I = lambda v: ('int', v)
+    return [('WLower', [I(0), V('TEMPVALUE0'), I(39)]), ('Add', [A('OBJECTXPOS'), V('TEMPVALUE1')]),
+            ('IfGreater', [I(2), A('OBJECTXPOS'), I(33554432)]), ('Sub', [A('OBJECTXPOS'), I(33554432)]), ('endif', []),
+            ('Equal', [V('TEMPVALUE2'), A('OBJECTXPOS')]), ('ShR', [V('TEMPVALUE2'), I(16)]), ('Inc', [V('ARRAYPOS0')]),
+            ('DrawSpriteScreenXY', [V('TEMPVALUE0'), V('TEMPVALUE2'), I(0)]), ('Inc', [V('TEMPVALUE0')]),
+            ('DrawSpriteScreenXY', [V('TEMPVALUE0'), V('TEMPVALUE2'), I(0)]), ('Inc', [V('TEMPVALUE0')]),
+            ('Add', [V('TEMPVALUE1'), I(8192)]), ('loop', [])]
+
+
+def patch_title_water(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, wlower = nm.index('PS1TitleWater'), nm.index('WLower')
+    path = os.path.join(data, 'Scripts', 'ByteCode', 'PS000.bin')  # presentation stage 0 = the Title
+    raw = open(path, 'rb').read()
+    code, p = bs.blocks(raw, 0)
+    tmpl = title_water()
+    hits = []
+    for at in range(len(code)):
+        if code[at] not in (wlower, op):
+            continue
+        try:
+            ins = instructions(code, at, names, vars_)[:len(tmpl)]
+        except (IndexError, KeyError):
+            continue
+        ins = [(a, 'WLower' if (a == at and n == 'PS1TitleWater') else n, o) for a, n, o in ins]
+        if matches(ins, tmpl):
+            hits.append(at)
+    if len(hits) != 1:
+        sys.exit('ERROR patch_bytecode: PS000 Title water loop: %d matches' % len(hits))
+    at = hits[0]
+    if code[at] == op:
+        return 'Title water loop native in - (already: PS000.bin@%d)' % at
+    code[at] = op
+    open(path, 'wb').write(encode(code) + raw[p:])
+    assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+    return 'Title water loop native in PS000.bin@%d' % at
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
@@ -578,6 +621,7 @@ def main():
     print('PS*.bin: ' + patch_text_loops(data))
     print('SS*.bin: ' + patch_ufo_view(data))
     print('GS000.bin: ' + patch_save_objects(data))
+    print('PS000.bin: ' + patch_title_water(data))
 
 
 if __name__ == '__main__':

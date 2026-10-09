@@ -506,6 +506,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1TextLoop", 3),
     FunctionInfo("PS1UfoView", 2),
     FunctionInfo("PS1SaveObjects", 3),
+    FunctionInfo("PS1TitleWater", 3),
 #endif
 };
 
@@ -940,6 +941,7 @@ enum ScrFunction {
     FUNC_PS1TEXTLOOP,
     FUNC_PS1UFOVIEW,
     FUNC_PS1SAVEOBJECTS,
+    FUNC_PS1TITLEWATER,
 #endif
     FUNC_MAX_CNT
 };
@@ -4532,6 +4534,41 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     } while (p < end);
                 }
                 scriptEng.operands[1] = p; // the exit test's operands (WLower jt, pos0, end); the body's have at most 2
+                scriptCodePtr = scriptCodeStart + jumpTable[jumpTableStart + scriptEng.operands[0] + 1];
+                break;
+            }
+            case FUNC_PS1TITLEWATER: {
+                // The Title's Background draw sub draws the water strips in script: ~20 iterations of 13 VM instructions
+                // a frame (docs/28 speed pass 2):
+                //   while (t0 < end) { e = objectEntityList[pos0]; e.XPos += t1; if (e.XPos > 0x2000000) e.XPos -= 0x2000000;
+                //     t2 = e.XPos >> 16; ++pos0; DrawSpriteScreenXY t0, t2, 0; ++t0; DrawSpriteScreenXY t0, t2, 0; ++t0;
+                //     t1 += 8192 }
+                // The build-time patch checks the loop and swaps only its WLower opcode; the same loop natively (the
+                // jump stack slots, the operand registers), then the loop's exit.
+                opcodeSize = 0;
+                int *t = scriptEng.tempValue, &p0 = scriptEng.arrayPosition[0], end = scriptEng.operands[2];
+                int *js         = &jumpTableStack[jumpTableStackPos];
+                ObjectScript *si = PS1ScriptInfo();
+                auto draw = [&](int frame, int x, int y) { // FUNC_DRAWSPRITESCREENXY
+                    SpriteFrame *sf = &scriptFrames[si->frameListOffset + frame];
+                    DrawSprite(x + sf->pivotX, y + sf->pivotY, sf->width, sf->height, sf->sprX, sf->sprY, si->spriteSheetID);
+                };
+                while (t[0] < end) {
+                    js[1]    = scriptEng.operands[0];
+                    Entity &e = objectEntityList[p0];
+                    e.XPos    = (int)((uint)e.XPos + (uint)t[1]);
+                    js[2]     = 2;
+                    if (e.XPos > 0x2000000)
+                        e.XPos = (int)((uint)e.XPos - 0x2000000u);
+                    t[2] = e.XPos >> 16;
+                    ++p0;
+                    draw(t[0], t[2], 0);
+                    ++t[0];
+                    draw(t[0], t[2], 0);
+                    ++t[0];
+                    t[1] = (int)((uint)t[1] + 8192u);
+                }
+                scriptEng.operands[1] = t[0]; // the exit test's operand registers (WLower jt, t0, end)
                 scriptCodePtr = scriptCodeStart + jumpTable[jumpTableStart + scriptEng.operands[0] + 1];
                 break;
             }
