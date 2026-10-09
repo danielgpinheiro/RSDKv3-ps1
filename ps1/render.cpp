@@ -394,8 +394,10 @@ static PS1ClusterCacheEntry s_clusterCache[PS1_CLUSTER_CACHE];
 static int16_t s_sheetLast[PS1_ATLAS_MAX_SHEETS][PS1_SHEET_MRU];
 static uint8_t s_sheetLastPos[PS1_ATLAS_MAX_SHEETS];
 static int8_t s_sheetDisjoint[PS1_ATLAS_MAX_SHEETS]; // -1 unknown, 0 overlapping clusters, 1 disjoint
+static void PS1ClearFrameCache();
 static void PS1ClearClusterCache()
 {
+    PS1ClearFrameCache();
     memset(s_clusterCache, 0xFF, sizeof(s_clusterCache));
     memset(s_sheetLast, 0xFF, sizeof(s_sheetLast));
     memset(s_sheetLastPos, 0, sizeof(s_sheetLastPos));
@@ -1624,10 +1626,59 @@ void DrawScaledTintMask(int direction, int XPos, int YPos, int pivotX, int pivot
 // ---------------------------------------------------------------------------------------------------
 // Sprites
 
+// Frames drawn whole from one cluster (speed pass 2: the Credits' letters, HUD digits, most objects): the piece split
+// and the cluster lookup done once per (sheet, frame rectangle), the sprite's texture page and CLUT kept with it. A hit
+// with opaque ink chains exactly what PS1ChainPieceSprite would; anything else (several pieces, an on-demand picture,
+// ink) takes the general path. Cleared with the cluster cache (an atlas or surface change).
+struct PS1FrameCacheEntry {
+    int16_t sheet, x, y, w, h, cluster;
+    uint8_t u, v;
+    uint16_t tpage, clut;
+};
+#define PS1_FRAME_CACHE 128
+static PS1FrameCacheEntry s_frameCache[PS1_FRAME_CACHE];
+static void PS1ClearFrameCache() { memset(s_frameCache, 0xFF, sizeof(s_frameCache)); }
+volatile uint32_t g_ps1FrameCacheHits = 0;
+
 void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
     if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
         return;
+    int sheet = PS1SurfaceSheet(sheetID); // (also clears the caches when the surfaces or the atlas change)
+    if (sheet >= 0 && s_ink == PS1_INK_OPAQUE) {
+        PS1FrameCacheEntry &e = s_frameCache[((unsigned)sprX * 7 + (unsigned)sprY * 13 + (unsigned)sheet * 31 + (unsigned)width * 3) & (PS1_FRAME_CACHE - 1)];
+        if (e.sheet == sheet && e.x == sprX && e.y == sprY && e.w == width && e.h == height) {
+            psyqo::PrimPieces::TPageAttr attr;
+            memcpy(&attr, &e.tpage, 2);
+            PS1ChainTPage(attr);
+            psyqo::Prim::Sprite s(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
+            s.position = psyqo::Vertex{ { .x = (int16_t)XPos, .y = (int16_t)YPos } };
+            s.size     = psyqo::Vertex{ { .w = (int16_t)width, .h = (int16_t)height } };
+            psyqo::PrimPieces::ClutIndex clut;
+            memcpy(&clut, &e.clut, 2);
+            s.texInfo = psyqo::PrimPieces::TexInfo{ e.u, e.v, clut };
+            PS1ChainSprite(s);
+            g_ps1DrawSprites   = g_ps1DrawSprites + 1;
+            g_ps1FrameCacheHits = g_ps1FrameCacheHits + 1;
+            return;
+        }
+        int pieces = 0;
+        PS1Piece one{};
+        PS1ForEachPieceAtlas(sheet, sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
+            if (++pieces == 1)
+                one = p;
+            PS1ChainPieceSprite(p, XPos + p.ox, YPos + p.oy);
+        });
+        if (pieces == 1 && one.ox == 0 && one.oy == 0 && one.w == width && one.h == height && !one.c->picture) {
+            psyqo::PrimPieces::TPageAttr attr = PS1ClusterTPage(one.c);
+            psyqo::PrimPieces::ClutIndex clut = PS1ClusterClut(one.c);
+            e = PS1FrameCacheEntry{ (int16_t)sheet, (int16_t)sprX, (int16_t)sprY, (int16_t)width, (int16_t)height,
+                                    (int16_t)(one.c - g_ps1AtlasClusters), (uint8_t)one.u, (uint8_t)one.v, 0, 0 };
+            memcpy(&e.tpage, &attr, 2);
+            memcpy(&e.clut, &clut, 2);
+        }
+        return;
+    }
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) { PS1ChainPieceSprite(p, XPos + p.ox, YPos + p.oy); });
 }
 
