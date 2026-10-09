@@ -10,11 +10,11 @@
 # Usage: make BOOT=R11A && tools/logic_test.sh [OUT_PREFIX] [S0=240] [S1=420] [S2=432] [S3=600]
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv3_logic}; S0=${2:-240}; S1=${3:-420}; S2=${4:-432}; S3=${5:-600}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1LoadingDoneHook
 commands
@@ -46,12 +46,13 @@ end
 end
 continue
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv3.ps-exe \
+redux_wait_free
+"$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
+REDUX_PID=$!
 sleep 4
 timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|PROF|  ctrl|  prof) .*" | tee "$OUT.txt"
-pkill -f PCSX-Redux
+redux_stop
 [ -f "${OUT}_ents.bin" ] && python3 - "${OUT}_ents.bin" <<'PYEOF'
 import sys, collections
 d = open(sys.argv[1], 'rb').read()

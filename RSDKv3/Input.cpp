@@ -20,6 +20,11 @@ int hapticEffectNum = -2;
 #include <psyqo/advancedpad.hh>
 extern psyqo::AdvancedPad *g_ps1Pad; // main.cpp (initialized in start())
 volatile uint16_t g_ps1PadTestMask  = 0; // GDB-injected input, bit = INPUT_* index (test harness)
+// Pad script (docs/28 speed pass 2): steps (frame << 8 | INPUT_* mask), set from GDB; from each step's frame
+// (g_ps1PerfFrames, engine frames since boot) g_ps1PadTestMask = its mask. Deterministic runs: tools/play/scene_run.sh.
+volatile uint32_t g_ps1PadScript[64] = {};
+volatile uint32_t g_ps1PadScriptSteps = 0, g_ps1PadScriptPos = 0;
+extern volatile uint32_t g_ps1PerfFrames;
 volatile uint16_t g_ps1PadButtons   = 0; // last input mask (bit = INPUT_* index)
 volatile uint32_t g_ps1PadConnected = 0; // pad 1 seen by the BIOS driver
 #endif
@@ -521,6 +526,10 @@ void ProcessInput()
     using Pad = psyqo::AdvancedPad;
     static const Pad::Button map[INPUT_ANY] = { Pad::Up,    Pad::Down,   Pad::Left,   Pad::Right,
                                                 Pad::Cross, Pad::Circle, Pad::Square, Pad::Start };
+    while (g_ps1PadScriptPos < g_ps1PadScriptSteps && (g_ps1PadScript[g_ps1PadScriptPos] >> 8) <= g_ps1PerfFrames) {
+        g_ps1PadTestMask  = g_ps1PadScript[g_ps1PadScriptPos] & 0xFF;
+        g_ps1PadScriptPos = g_ps1PadScriptPos + 1;
+    }
     uint16_t held  = g_ps1PadTestMask;
     bool connected = g_ps1Pad && g_ps1Pad->isPadConnected(Pad::Pad::Pad1a);
     if (connected) {

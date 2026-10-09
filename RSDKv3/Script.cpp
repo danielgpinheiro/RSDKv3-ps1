@@ -2294,6 +2294,9 @@ void ClearScriptData()
 
 }
 
+#if PS1_SAMPLE
+volatile int32_t g_ps1ScriptPC = 0; // the instruction ProcessScript runs (scriptCode index), 0 outside (ps1/pc_sampler.cpp)
+#endif
 void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
 {
     bool running      = true;
@@ -2302,6 +2305,9 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
     jumpTableStackPos = 0;
     functionStackPos  = 0;
     while (running) {
+#if PS1_SAMPLE
+        g_ps1ScriptPC = scriptCodePtr;
+#endif
         int opcode           = scriptCode[scriptCodePtr++];
 #if RETRO_PLATFORM == RETRO_PS1
         if ((uint)opcode >= FUNC_MAX_CNT) { // corrupt / desynced code: stop this sub instead of jumping wild
@@ -4936,4 +4942,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
             }
         }
     }
+#if PS1_SAMPLE
+    g_ps1ScriptPC = 0;
+#endif
 }

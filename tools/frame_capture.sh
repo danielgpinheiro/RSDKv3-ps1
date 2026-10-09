@@ -6,11 +6,11 @@
 #        GDBSET='var=value' also applied at FROM, e.g. GDBSET='waterLevel=1900')
 cd "$(dirname "$0")/.."
 N=$1; OUT=$2
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1PerfTick if g_ps1PerfFrames == ${FROM:-0}
 continue
@@ -29,8 +29,9 @@ printf "SLOTS %u %u %u %u wait=%u slowTiles=%u prims=%u\n", g_ps1ProfSlot[0], g_
 printf "LAYERS uniform=%u lines=%u tiles=%u strips=%u (hblanks) calls=%u bands tiles=%u strips=%u stripRegions=%u objects=%u drawSubs=%u | ink pieces=%u clutFades=%u fadeMode=%d fadeA=%d | banks regions=%u mask=%x water=%d\n", g_ps1ProfLayer[0], g_ps1ProfLayer[1], g_ps1ProfLayer[2], g_ps1ProfLayer[3], g_ps1ProfLayer[4], g_ps1TileBandCount, g_ps1StripBandCount, g_ps1StripRegions, g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl, g_ps1InkPieces, g_ps1ClutFades, fadeMode, fadeA, g_ps1BankRegions, g_ps1BankMask, waterDrawPos
 detach
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+redux_wait_free
+"$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+REDUX_PID=$!
 sleep 4
 timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(FRAME|LAYERS|ACTIVE|SLOTS|MISS|FACES|FLOOR) .*"
-pkill -f PCSX-Redux
+redux_stop

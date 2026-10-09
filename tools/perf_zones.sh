@@ -7,14 +7,14 @@
 cd "$(dirname "$0")/.."
 OUT=$1; shift
 F0=${F0:-240}; F1=${F1:-600}; MASK=${MASK:-8}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 for ST in "$@"; do
   touch RSDKv3/main.cpp RSDKv3/RetroEngine.cpp
   make -s -j8 BOOT=$ST >/dev/null 2>&1 || { echo "$ST build failed"; continue; }
   cat > "${OUT}_$ST.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1PerfTick if g_ps1PerfFrames == $F0
 continue
@@ -29,10 +29,11 @@ printf "ZONE %-6s max=%u over=%u/%u last=%u | objects=%u drawSubs=%u layers=%u s
 shell python3 tools/vramshot.py ${OUT}_$ST >/dev/null
 detach
 GDBEOF
-  pkill -f PCSX-Redux 2>/dev/null; sleep 1
-  $PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+  redux_wait_free
+  "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+REDUX_PID=$!
   sleep 4
   timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "${OUT}_$ST.gdb" 2>&1 | grep -oE "ZONE .*" || echo "ZONE $ST (no result)"
-  pkill -f PCSX-Redux
+  redux_stop
 done
 touch RSDKv3/main.cpp RSDKv3/RetroEngine.cpp

@@ -30,6 +30,28 @@ volatile uint32_t g_ps1HeapTotal           = 0; // bytes between bss end and the
 volatile uint32_t g_ps1HeapHeadroom        = 0; // bytes never reached by the heap high-water mark
 volatile uint32_t g_ps1InitDone            = 0; // Engine.Init() returned
 static uint32_t s_ps1PerfLastCount         = 0;
+// Measurement window (docs/28 speed pass 2): frames g_ps1PerfWinFrom <= n < g_ps1PerfWinTo (set from GDB) add their
+// CPU time and vsyncs here (tools/play/scene_run.sh).
+volatile uint32_t g_ps1PerfWinFrom   = 0xFFFFFFFF;
+volatile uint32_t g_ps1PerfWinTo     = 0;
+volatile uint32_t g_ps1PerfWinFrames = 0; // frames counted
+volatile uint32_t g_ps1PerfWinHbl    = 0; // sum of their CPU hblanks
+volatile uint32_t g_ps1PerfWinVbl    = 0; // sum of their vsyncs (1 a frame = 60 fps)
+volatile uint32_t g_ps1PerfWinMaxHbl = 0; // worst CPU hblanks
+volatile uint32_t g_ps1PerfWinMaxVbl = 0; // worst vsyncs
+volatile uint32_t g_ps1PerfWinOver   = 0; // frames over one vsync
+// Only frames of the scene the window started in, without a load, count: a reload (a lost life), a time warp or the
+// stage's end (its stage index changes before the results screen) stops the count (g_ps1PerfWinSkipped: frames left out).
+volatile uint32_t g_ps1PerfWinSkipped = 0;
+static uint32_t s_ps1PerfWinLoads = 0, s_ps1PerfLoadsBefore = 0;
+static bool s_ps1PerfWinStopped = false;
+static int s_ps1PerfWinStage = 0;
+extern volatile uint32_t g_ps1LoadingLoads; // ps1/loading.cpp: outermost loads begun
+// Test stops: engine frames (ascending) at which the frame end calls ps1TestStop, where GDB breaks (one stop per listed
+// frame instead of a conditional breakpoint evaluated every frame over the stub).
+volatile uint32_t g_ps1TestStops[8] = {};
+volatile uint32_t g_ps1TestStopCount = 0, g_ps1TestStopPos = 0;
+extern "C" __attribute__((noinline)) void ps1TestStop() { __asm__ volatile(""); }
 
 psyqo::GPU *g_ps1GPU            = nullptr;
 psyqo::AdvancedPad *g_ps1Pad    = nullptr;
@@ -41,6 +63,7 @@ void PS1SaveTestService();                  // RSDKv3/Userdata.cpp (GDB test hoo
 void PS1McPrepare();                        // ps1/memcard.cpp
 void PS1RenderEndFrame();
 void PS1IrqGuardInstall();                  // ps1/irq_guard.cpp
+void PS1SamplerInstall();                   // ps1/pc_sampler.cpp (`make SAMPLE=1`; empty otherwise)
 
 __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
     uint32_t now = gpu.getFrameCount();
@@ -48,8 +71,33 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
         uint32_t d               = now - s_ps1PerfLastCount;
         g_ps1PerfVsyncs          = g_ps1PerfVsyncs + d;
         g_ps1PerfLastFrameVsyncs = d;
+        uint32_t n = g_ps1PerfFrames;
+        int stage = activeStageList * 0x100 + stageListPosition;
+        if (n == g_ps1PerfWinFrom)
+            s_ps1PerfWinLoads = s_ps1PerfLoadsBefore, s_ps1PerfWinStopped = false, s_ps1PerfWinStage = stage;
+        if (n >= g_ps1PerfWinFrom && n < g_ps1PerfWinTo && (g_ps1LoadingLoads != s_ps1PerfWinLoads || stage != s_ps1PerfWinStage))
+            s_ps1PerfWinStopped = true;
+        if (n >= g_ps1PerfWinFrom && n < g_ps1PerfWinTo && s_ps1PerfWinStopped)
+            g_ps1PerfWinSkipped = g_ps1PerfWinSkipped + 1;
+        else if (n >= g_ps1PerfWinFrom && n < g_ps1PerfWinTo) {
+            uint32_t cpu       = g_ps1PerfLastHbl;
+            g_ps1PerfWinFrames = g_ps1PerfWinFrames + 1;
+            g_ps1PerfWinHbl    = g_ps1PerfWinHbl + cpu;
+            g_ps1PerfWinVbl    = g_ps1PerfWinVbl + d;
+            if (cpu > g_ps1PerfWinMaxHbl)
+                g_ps1PerfWinMaxHbl = cpu;
+            if (d > g_ps1PerfWinMaxVbl)
+                g_ps1PerfWinMaxVbl = d;
+            if (d > 1)
+                g_ps1PerfWinOver = g_ps1PerfWinOver + 1;
+        }
     }
-    s_ps1PerfLastCount = now;
+    s_ps1PerfLastCount   = now;
+    s_ps1PerfLoadsBefore = g_ps1LoadingLoads; // loads begun up to the end of this frame
+    if (g_ps1TestStopPos < g_ps1TestStopCount && g_ps1PerfFrames == g_ps1TestStops[g_ps1TestStopPos]) {
+        g_ps1TestStopPos = g_ps1TestStopPos + 1;
+        ps1TestStop(); // g_ps1PerfFrames = the listed frame here
+    }
     g_ps1PerfFrames    = g_ps1PerfFrames + 1;
     uintptr_t hs = (uintptr_t)&__heap_start, ss = (uintptr_t)&__stack_start;
     uintptr_t top = (uintptr_t)psyqo_heap_end();
@@ -81,6 +129,7 @@ class RSDKv3PS1App final : public psyqo::Application {
     void start() override {
         m_cdrom.resetBlocking(gpu());
         g_ps1CDRom = &m_cdrom;
+        PS1SamplerInstall();
         PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (ps1/irq_guard.hh)
         m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;

@@ -10,11 +10,11 @@
 # Frame CPU time is in hblanks (16-bit root counter 1: a frame longer than ~4 s wraps; use LOAD us).
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/rsdkv3_boot}; F1=${2:-60}; F2=${3:-600}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1LoadingDoneHook
 commands
@@ -41,9 +41,10 @@ end
 end
 continue
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -iso build/game.cue -exe rsdkv3.ps-exe \
+redux_wait_free
+"$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe \
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
+REDUX_PID=$!
 sleep 4
 timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|FRAME|STATE|PROF|GUARDS|CHAIN) .*|rror.*" | tee "$OUT.txt"
-pkill -f PCSX-Redux
+redux_stop

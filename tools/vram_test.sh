@@ -5,11 +5,11 @@
 # Usage: tools/vram_test.sh STAGE [OUT_PREFIX] [F=10]
 cd "$(dirname "$0")/.."
 STAGE=$1; OUT=${2:-/tmp/rsdkv3_vram}; F=${3:-10}
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1LoadingDoneHook if g_ps1InitDone
 commands
@@ -27,9 +27,10 @@ detach
 end
 continue
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+redux_wait_free
+"$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+REDUX_PID=$!
 sleep 4
 timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOADED|FRAME) .*"
-pkill -f PCSX-Redux
+redux_stop
 /usr/bin/python3 tools/check_vram.py "${OUT}_vram.bin" build/iso/Data "$STAGE" "${OUT}_pal.bin"

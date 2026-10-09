@@ -3,12 +3,12 @@
 # checked against the host (file CRC-32s), a VRAM dump during the load (loading icon) and after,
 # and a Cross press through tools/pad.lua. Needs tools/smoke_disc.sh first.
 cd "$(dirname "$0")/.."
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+. tools/redux_env.sh
 OUT=${1:-/tmp/rsdkv3_smoke}
 cat > "$OUT.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1LoadingDebugHook if tick == 3
 commands
@@ -33,20 +33,21 @@ while $i < 6
   printf "FILE %d size=%u crc=%08x\n", $i, g_ps1TestSize[$i], g_ps1TestCrc[$i]
   set $i = $i + 1
 end
-shell curl -s 'http://localhost:8080/api/v1/lua/pad?press=Cross' >/dev/null
+shell curl -s 'http://localhost:$REDUX_WEB/api/v1/lua/pad?press=Cross' >/dev/null
 tbreak PS1ChainEnd if g_ps1PerfFrames == 130
 continue
 printf "PAD pressed=%04x\n", g_ps1TestPad
-shell curl -s 'http://localhost:8080/api/v1/lua/pad?release=Cross' >/dev/null
+shell curl -s 'http://localhost:$REDUX_WEB/api/v1/lua/pad?release=Cross' >/dev/null
 GDBEOF
 echo "shell python3 tools/vramshot.py ${OUT}_f130" >> "$OUT.gdb"
 echo "detach" >> "$OUT.gdb"
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -exec "dofile('$PWD/tools/pad.lua')" \
+redux_wait_free
+"$REDUX_BIN" $REDUX_ARGS -exec "dofile('$PWD/tools/pad.lua')" \
       -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+REDUX_PID=$!
 sleep 4
 timeout 600 /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -E "^(ICON|LOAD|RESULT|FILE|PAD)" | tee "$OUT.log"
-pkill -f PCSX-Redux
+redux_stop
 python3 - "$OUT.log" <<'PYEOF'
 import re, sys, zlib
 files = ['Data/Game/GameConfig.bin', 'Data/Stages/R11A/StageConfig.bin', 'Data/Stages/R11A/Act1.bin',

@@ -8,7 +8,7 @@
 set -u
 cd "$(dirname "$0")/../.."
 W=${1:-/tmp/rsdkv3_save_test}; mkdir -p "$W"
-PCSX=/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux
+REDUX_CARDS=0 . tools/redux_env.sh
 CFG="$HOME/.config/pcsx-redux"
 MCD="python3 tools/memcard/mcd.py"
 cp -p "$CFG/pcsx.json" "$W/pcsx.json.bak"
@@ -19,7 +19,7 @@ $MCD format "$W/mc1.mcd" >/dev/null && $MCD raw "$W/mc2.mcd" >/dev/null
 cat > "$W/save.gdb" <<GDBEOF
 set pagination off
 set confirm off
-target remote localhost:3333
+target remote localhost:$REDUX_PORT
 symbol-file rsdkv3.elf
 break PS1PerfTick if g_ps1PerfFrames == 100
 continue
@@ -46,12 +46,13 @@ delete
 printf "READ2 reads=%u err=%d saveRAM[3]=%x saveRAM[1000]=%d\n", g_ps1SaveReads, g_ps1SaveLastError, saveRAM[3], saveRAM[1000]
 detach
 GDBEOF
-pkill -f PCSX-Redux 2>/dev/null; sleep 1
-$PCSX -fastboot -interpreter -debugger -gdb -gdb-port 3333 -webserver -memcard1 "$W/mc1.mcd" -memcard2 "$W/mc2.mcd" \
+redux_wait_free
+"$REDUX_BIN" $REDUX_ARGS -memcard1 "$W/mc1.mcd" -memcard2 "$W/mc2.mcd" \
       -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
+REDUX_PID=$!
 sleep 4
 timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$W/save.gdb" 2>&1 | grep -E "^(READ|WRITE)"
-pkill -f PCSX-Redux
+redux_stop
 echo "card 1 after the write:"; $MCD list "$W/mc1_saved.mcd"; $MCD check "$W/mc1_saved.mcd" BAHBRW-00003SONICCD
 echo "card 2 (blank, slot 2) untouched:"; $MCD list "$W/mc2.mcd" 2>&1 | head -2
 shasum "$CFG"/memcard*.mcd 2>/dev/null | diff -q - "$W/cards.sha" >/dev/null && echo "player cards unchanged" || echo "player cards CHANGED"
