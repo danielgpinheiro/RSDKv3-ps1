@@ -97,12 +97,16 @@ if [ "$EMU" = ds ]; then
 else
   . tools/redux_env.sh
   sed -e "s/\$PORT/$REDUX_PORT/" -e "s/\$WEB/$REDUX_WEB/" "$OUT.gdb.in" > "$OUT.gdb"; mv "$OUT.gdb" "$OUT.gdb.in"
-  redux_wait_free
-  "$REDUX_BIN" $REDUX_ARGS -iso "${DISC:-build/game.cue}" -exe "$EXE" >/dev/null 2>&1 &
-  REDUX_PID=$!
-  sleep 4
-  timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
-  redux_stop
+  for attempt in 1 2; do # a rare GDB race ("target is running") loses a run: once more
+    rm -f "${OUT}_samples.bin"
+    redux_wait_free
+    "$REDUX_BIN" $REDUX_ARGS -iso "${DISC:-build/game.cue}" -exe "$EXE" >/dev/null 2>&1 &
+    REDUX_PID=$!
+    sleep 4
+    timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
+    redux_stop
+    grep -q "^RUN " "$OUT.gdb.log" && break
+  done
 fi
 grep -E "^(RUN|GUARDS|SAMPLES|CHECK|FROM|SKIPPED|X) " "$OUT.gdb.log" || { echo "NO RESULT ($OUT.gdb.log)"; tail -5 "$OUT.gdb.log"; }
 grep -E "^OBJ " "$OUT.gdb.log" > "${OUT}_scripts.txt" 2>/dev/null

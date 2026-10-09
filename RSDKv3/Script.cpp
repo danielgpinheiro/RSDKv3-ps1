@@ -1978,6 +1978,7 @@ void ParseScriptFile(char *scriptName, int scriptID)
 #define PS1_DIRECT_ENTI   2 // int at &objectEntityList[objectLoop] + offset
 #define PS1_DIRECT_ENTB   3 // byte at &objectEntityList[objectLoop] + offset
 #define PS1_DIRECT_CONST  4 // an int constant (the payload); written back nowhere
+// kind bits: 1 = byte, 2 = from the running entity, 4 = constant (decoded without a switch in ProcessScript)
 volatile uint32_t g_ps1DirectOperands = 0, g_ps1GenericOperands = 0; // rewritten / left generic by the last walks
 
 // Entity fields with a plain read and write: offset, 1 = byte.
@@ -2485,12 +2486,12 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     g_ps1ScriptOpdDirect = g_ps1ScriptOpdDirect + 1;
 #endif
                     int pay = scriptCode[scriptCodePtr + 1];
-                    switch (d & 7) {
-                        case PS1_DIRECT_ABSI: scriptEng.operands[i] = *(int *)(intptr_t)pay; break;
-                        case PS1_DIRECT_ABSB: scriptEng.operands[i] = *(byte *)(intptr_t)pay; break;
-                        case PS1_DIRECT_ENTI: scriptEng.operands[i] = *(int *)((char *)&objectEntityList[objectLoop] + pay); break;
-                        case PS1_DIRECT_ENTB: scriptEng.operands[i] = *(byte *)((char *)&objectEntityList[objectLoop] + pay); break;
-                        default: scriptEng.operands[i] = pay; break;
+                    if (d & PS1_DIRECT_CONST) {
+                        scriptEng.operands[i] = pay;
+                    }
+                    else {
+                        const char *a = (const char *)(intptr_t)pay + ((d & 2) ? (intptr_t)&objectEntityList[objectLoop] : 0);
+                        scriptEng.operands[i] = (d & 1) ? *(const byte *)a : *(const int *)a;
                     }
                     scriptCodePtr += (d >> 4) & 7;
                     continue;
@@ -4527,12 +4528,12 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 int d = scriptCode[scriptCodePtr];
                 if (d < 0) { // direct operand (PS1DirectOperand)
                     int pay = scriptCode[scriptCodePtr + 1];
-                    switch (d & 7) {
-                        case PS1_DIRECT_ABSI: *(int *)(intptr_t)pay = scriptEng.operands[i]; break;
-                        case PS1_DIRECT_ABSB: *(byte *)(intptr_t)pay = (byte)scriptEng.operands[i]; break;
-                        case PS1_DIRECT_ENTI: *(int *)((char *)&objectEntityList[objectLoop] + pay) = scriptEng.operands[i]; break;
-                        case PS1_DIRECT_ENTB: *(byte *)((char *)&objectEntityList[objectLoop] + pay) = (byte)scriptEng.operands[i]; break;
-                        default: break; // a constant
+                    if (!(d & PS1_DIRECT_CONST)) { // a constant is written back nowhere
+                        char *a = (char *)(intptr_t)pay + ((d & 2) ? (intptr_t)&objectEntityList[objectLoop] : 0);
+                        if (d & 1)
+                            *(byte *)a = (byte)scriptEng.operands[i];
+                        else
+                            *(int *)a = scriptEng.operands[i];
                     }
                     scriptCodePtr += (d >> 4) & 7;
                     continue;
