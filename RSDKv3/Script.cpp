@@ -2416,7 +2416,9 @@ void LoadBytecode(int stageListID, int scriptID)
             for (int i = 0; i < 4; ++i) PS1FixScriptPtr(subs[i]);
         }
         for (int f = 0; f < functionCount; ++f) PS1FixScriptPtr(&scriptFunctionList[f].ptr);
+#ifndef RETRO_PS1_HOST_TOOL // the host manifest tool (64-bit pointers) keeps the generic operands
         PS1DirectOperandsLoad(scriptID, scriptCount, functionCount);
+#endif
 #endif
 
         CloseFile();
