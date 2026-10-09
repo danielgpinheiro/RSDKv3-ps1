@@ -1017,7 +1017,7 @@ static void PS1TileSetup()
         return;
     psyqo::PrimPieces::ClutIndex clut(psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
     uint16_t c;
-    memcpy(&c, &clut, 2);
+    __builtin_memcpy(&c, &clut, 2);
     s_tileClutWord = (uint32_t)c << 16;
     for (int p = 0; p < 4; ++p) {
         s_tileTPage[p].set(psyqo::Prim::TPageAttr::ColorMode::Tex8Bits);
@@ -1272,7 +1272,7 @@ void PS1LoadBGStrips(const char *folder, int player)
             psyqo::PrimPieces::ClutIndex ci(r.clut ? psyqo::Vertex{ { .x = (int16_t)s_stripCluts[r.clut - 1].x, .y = (int16_t)s_stripCluts[r.clut - 1].y } }
                                                    : psyqo::Vertex{ { .x = PS1_CLUT_X, .y = PS1_CLUT_Y } });
             uint16_t c;
-            memcpy(&c, &ci, 2);
+            __builtin_memcpy(&c, &ci, 2);
             r.clutWord = (uint32_t)c << 16;
         }
         for (int k = 0; k < PS1_STRIP_PIECES; ++k) {
@@ -1675,13 +1675,14 @@ void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, i
         PS1FrameCacheEntry &e = s_frameCache[((unsigned)sprX * 7 + (unsigned)sprY * 13 + (unsigned)sheet * 31 + (unsigned)width * 3) & (PS1_FRAME_CACHE - 1)];
         if (e.sheet == sheet && e.x == sprX && e.y == sprY && e.w == width && e.h == height) {
             psyqo::PrimPieces::TPageAttr attr;
-            memcpy(&attr, &e.tpage, 2);
+            // (fixed-size type puns: __builtin_memcpy is inlined, memcpy is a call under -fno-builtin)
+            __builtin_memcpy(&attr, &e.tpage, 2);
             PS1ChainTPage(attr);
             psyqo::Prim::Sprite s(psyqo::Color{ { .r = s_inkMod, .g = s_inkMod, .b = s_inkMod } });
             s.position = psyqo::Vertex{ { .x = (int16_t)XPos, .y = (int16_t)YPos } };
             s.size     = psyqo::Vertex{ { .w = (int16_t)width, .h = (int16_t)height } };
             psyqo::PrimPieces::ClutIndex clut;
-            memcpy(&clut, &e.clut, 2);
+            __builtin_memcpy(&clut, &e.clut, 2);
             s.texInfo = psyqo::PrimPieces::TexInfo{ e.u, e.v, clut };
             PS1ChainSprite(s);
             g_ps1DrawSprites   = g_ps1DrawSprites + 1;
@@ -1700,8 +1701,8 @@ void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, i
             psyqo::PrimPieces::ClutIndex clut = PS1ClusterClut(one.c);
             e = PS1FrameCacheEntry{ (int16_t)sheet, (int16_t)sprX, (int16_t)sprY, (int16_t)width, (int16_t)height,
                                     (int16_t)(one.c - g_ps1AtlasClusters), (uint8_t)one.u, (uint8_t)one.v, 0, 0 };
-            memcpy(&e.tpage, &attr, 2);
-            memcpy(&e.clut, &clut, 2);
+            __builtin_memcpy(&e.tpage, &attr, 2);
+            __builtin_memcpy(&e.clut, &clut, 2);
         }
         return;
     }
@@ -2010,9 +2011,9 @@ void DrawTexturedFace(void *v, byte sheetID)
     }
     psyqo::PrimPieces::TPageAttr tp = PS1ClusterTPage(c);
     uint16_t tpage, clut;
-    memcpy(&tpage, &tp, 2);
+    __builtin_memcpy(&tpage, &tp, 2);
     psyqo::PrimPieces::ClutIndex ci = PS1ClusterClut(c);
-    memcpy(&clut, &ci, 2);
+    __builtin_memcpy(&clut, &ci, 2);
     auto uv = [&](int k) {
         int u = c->u + q[k].u - c->srcX, vv = c->v + q[k].v - c->srcY;
         return (uint32_t)(uint8_t)(u > 255 ? 255 : u) | ((uint32_t)(uint8_t)(vv > 255 ? 255 : vv) << 8);

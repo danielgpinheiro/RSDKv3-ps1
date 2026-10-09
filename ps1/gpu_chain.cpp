@@ -345,7 +345,9 @@ void PS1ChainTPage(psyqo::PrimPieces::TPageAttr attr) {
     runHook();
     uint16_t raw;
     static_assert(sizeof(attr) == sizeof(raw), "TPageAttr is 16 bits");
-    memcpy(&raw, &attr, sizeof(raw));
+    // __builtin_memcpy for the fixed-size type puns: -fno-builtin (nugget common.mk) makes memcpy a call, and
+    // copies under 4 bytes go byte by byte there (speed pass 2: ~16 hblanks a frame in R41A).
+    __builtin_memcpy(&raw, &attr, sizeof(raw));
     if (s_tpageValid && raw == s_lastTPage)
         return;
     psyqo::Prim::TPage tp;
@@ -378,7 +380,7 @@ void PS1ChainSprite16Raw(uint32_t xy, uint32_t tex) {
     static const uint32_t cmd = [] {
         psyqo::Prim::Sprite16x16 s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
         uint32_t w;
-        memcpy(&w, &s, 4);
+        __builtin_memcpy(&w, &s, 4);
         return w;
     }();
     if (g_ps1ChainSkipPrims)
@@ -402,7 +404,7 @@ void PS1ChainSprite16RawN(const uint32_t *xy, const uint32_t *tex, int n) {
     static uint32_t cmd = 0;
     if (!cmd) {
         psyqo::Prim::Sprite16x16 s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
-        memcpy(&cmd, &s, 4);
+        __builtin_memcpy(&cmd, &s, 4);
     }
     if (g_ps1ChainSkipPrims || n <= 0)
         return;
@@ -429,7 +431,7 @@ void PS1ChainSpriteRawN(const uint32_t *words, int n) {
     static uint32_t cmd = 0;
     if (!cmd) {
         psyqo::Prim::Sprite s(psyqo::Color{{.r = 0x80, .g = 0x80, .b = 0x80}});
-        memcpy(&cmd, &s, 4);
+        __builtin_memcpy(&cmd, &s, 4);
     }
     if (g_ps1ChainSkipPrims || n <= 0)
         return;
