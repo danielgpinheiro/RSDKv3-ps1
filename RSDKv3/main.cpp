@@ -38,6 +38,7 @@ volatile uint32_t g_ps1PerfWinFrames = 0; // frames counted
 volatile uint32_t g_ps1PerfWinHbl    = 0; // sum of their CPU hblanks
 volatile uint32_t g_ps1PerfWinVbl    = 0; // sum of their vsyncs (1 a frame = 60 fps)
 volatile uint32_t g_ps1PerfWinMaxHbl = 0; // worst CPU hblanks
+volatile uint32_t g_ps1PerfWinMaxAt  = 0; // the frame it was
 volatile uint32_t g_ps1PerfWinMaxVbl = 0; // worst vsyncs
 volatile uint32_t g_ps1PerfWinOver   = 0; // frames over one vsync
 // Only frames of the scene the window started in, without a load, count: a reload (a lost life), a time warp or the
@@ -85,7 +86,7 @@ __attribute__((noinline)) static void PS1PerfTick(psyqo::GPU &gpu) {
             g_ps1PerfWinHbl    = g_ps1PerfWinHbl + cpu;
             g_ps1PerfWinVbl    = g_ps1PerfWinVbl + d;
             if (cpu > g_ps1PerfWinMaxHbl)
-                g_ps1PerfWinMaxHbl = cpu;
+                g_ps1PerfWinMaxHbl = cpu, g_ps1PerfWinMaxAt = n;
             if (d > g_ps1PerfWinMaxVbl)
                 g_ps1PerfWinMaxVbl = d;
             if (d > 1)

@@ -386,16 +386,19 @@ struct PS1ClusterCacheEntry {
     int16_t sheet, x, y, index;
 };
 // 256 entries (speed pass 2: the Title's background strips and moving cloud UVs thrashed 64), plus per sheet the
-// cluster found last, tried before the scan when the sheet's clusters don't overlap (then the texel's cluster is unique,
+// last clusters found (PS1_SHEET_MRU), tried before the scan when the sheet's clusters don't overlap (then the texel's cluster is unique,
 // the one the scan finds; checked once per sheet and atlas: s_sheetDisjoint).
 #define PS1_CLUSTER_CACHE 256
 static PS1ClusterCacheEntry s_clusterCache[PS1_CLUSTER_CACHE];
-static int16_t s_sheetLast[PS1_ATLAS_MAX_SHEETS];
+#define PS1_SHEET_MRU 4 // the Title's water strips alternate two clusters of a 49-cluster sheet
+static int16_t s_sheetLast[PS1_ATLAS_MAX_SHEETS][PS1_SHEET_MRU];
+static uint8_t s_sheetLastPos[PS1_ATLAS_MAX_SHEETS];
 static int8_t s_sheetDisjoint[PS1_ATLAS_MAX_SHEETS]; // -1 unknown, 0 overlapping clusters, 1 disjoint
 static void PS1ClearClusterCache()
 {
     memset(s_clusterCache, 0xFF, sizeof(s_clusterCache));
     memset(s_sheetLast, 0xFF, sizeof(s_sheetLast));
+    memset(s_sheetLastPos, 0, sizeof(s_sheetLastPos));
     memset(s_sheetDisjoint, 0xFF, sizeof(s_sheetDisjoint));
 }
 static bool PS1SheetDisjoint(int sheet)
@@ -422,8 +425,10 @@ static const PS1AtlasCluster *PS1FindCluster(int sheet, int x, int y)
         const PS1AtlasCluster *c = &g_ps1AtlasClusters[e.index];
         return !c->picture || PS1AtlasPictureReady(c) ? c : nullptr;
     }
-    int last = s_sheetLast[sheet];
-    if (last >= 0) {
+    for (int m = 0; m < PS1_SHEET_MRU; ++m) {
+        int last = s_sheetLast[sheet][m];
+        if (last < 0)
+            break;
         const PS1AtlasCluster &c = g_ps1AtlasClusters[last];
         if (x >= c.srcX && x < c.srcX + c.w && y >= c.srcY && y < c.srcY + c.h && PS1SheetDisjoint(sheet)) {
             e = PS1ClusterCacheEntry{ (int16_t)sheet, (int16_t)x, (int16_t)y, (int16_t)last };
@@ -435,7 +440,8 @@ static const PS1AtlasCluster *PS1FindCluster(int sheet, int x, int y)
         const PS1AtlasCluster &c = g_ps1AtlasClusters[i];
         if (x >= c.srcX && x < c.srcX + c.w && y >= c.srcY && y < c.srcY + c.h) {
             e                  = PS1ClusterCacheEntry{ (int16_t)sheet, (int16_t)x, (int16_t)y, (int16_t)i };
-            s_sheetLast[sheet] = (int16_t)i;
+            s_sheetLast[sheet][s_sheetLastPos[sheet]] = (int16_t)i; // round robin over the sheet's last clusters
+            s_sheetLastPos[sheet] = (uint8_t)((s_sheetLastPos[sheet] + 1) % PS1_SHEET_MRU);
             return !c.picture || PS1AtlasPictureReady(&c) ? &c : nullptr;
         }
     }
@@ -1934,14 +1940,18 @@ void DrawTexturedFace(void *v, byte sheetID)
         int u = c->u + q[k].u - c->srcX, vv = c->v + q[k].v - c->srcY;
         return (uint32_t)(uint8_t)(u > 255 ? 255 : u) | ((uint32_t)(uint8_t)(vv > 255 ? 255 : vv) << 8);
     };
-    uint32_t w[9];
+    uint32_t *w = PS1ChainRawBegin(9); // written in the arena (speed pass 2: no staging copy)
+    if (!w) { // the arena is full (counted by the chain) or primitives are off: counted as before
+        g_ps1Faces = g_ps1Faces + 1;
+        return;
+    }
     w[0] = 0x2C808080; // GP0 2Ch textured quad, colour 0x80 (texels unchanged)
     for (int k = 0; k < 4; ++k) w[1 + 2 * k] = (uint32_t)(uint16_t)q[k].x | ((uint32_t)(uint16_t)q[k].y << 16);
     w[2] = uv(0) | ((uint32_t)clut << 16);
     w[4] = uv(1) | ((uint32_t)tpage << 16);
     w[6] = uv(2);
     w[8] = uv(3);
-    PS1ChainPrimsRawN(w, 9, 1);
+    PS1ChainRawEnd(); // (marks the GPU's texture page unknown: the quad sets it)
     g_ps1Faces = g_ps1Faces + 1;
 }
 // Pre-scaled glyphs (tools/font/prescale_font.py, user decision 2026-09-24): the font's table,
