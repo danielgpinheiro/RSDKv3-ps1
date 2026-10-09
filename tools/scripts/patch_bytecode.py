@@ -456,6 +456,60 @@ def patch_text_loops(data):
     return 'text loops native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
+# The special stages' UFO-type objects: the floor-camera transform block in their main subs (docs/28 speed pass 2): only
+# its first opcode (Equal TEMPVALUE0, OBJECTXPOS) becomes PS1UfoView (RSDKv3/Script.cpp runs the 20 instructions
+# natively and continues after their 148 words). k: the object values receiving the result (k, k + 1).
+def ufo_view(k):
+    L = lambda n: ('var', (n, 1, (0, 0)))
+    T = lambda i: V('TEMPVALUE%d' % i)
+    O = lambda i: V('OBJECTVALUE%d' % i)
+    return [('Equal', [T(0), V('OBJECTXPOS')]), ('Sub', [T(0), L('TILELAYERXPOS')]), ('ShR', [T(0), ('int', 8)]),
+            ('Equal', [T(1), V('OBJECTYPOS')]), ('Sub', [T(1), L('TILELAYERZPOS')]), ('ShR', [T(1), ('int', 8)]),
+            ('Sin', [T(2), L('TILELAYERANGLE')]), ('Mul', [T(2), T(1)]), ('Cos', [T(3), L('TILELAYERANGLE')]), ('Mul', [T(3), T(0)]),
+            ('Equal', [O(k), T(2)]), ('Sub', [O(k), T(3)]), ('ShR', [O(k), ('int', 9)]),
+            ('Cos', [T(2), L('TILELAYERANGLE')]), ('Mul', [T(2), T(1)]), ('Sin', [T(3), L('TILELAYERANGLE')]), ('Mul', [T(3), T(0)]),
+            ('Equal', [O(k + 1), T(2)]), ('Add', [O(k + 1), T(3)]), ('ShR', [O(k + 1), ('int', 9)])]
+
+
+def patch_ufo_view(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, equal = nm.index('PS1UfoView'), nm.index('Equal')
+    bc = os.path.join(data, 'Scripts', 'ByteCode')
+    done, already = [], []
+    for fn in sorted(os.listdir(bc)):
+        if not fn.startswith('SS'):
+            continue
+        path = os.path.join(bc, fn)
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        new = []
+        for at in range(len(code)):
+            if code[at] not in (equal, op):
+                continue
+            try:
+                ins = instructions(code, at, names, vars_)[:20]
+            except (IndexError, KeyError):
+                continue
+            ins = [(a, 'Equal' if (a == at and n == 'PS1UfoView') else n, o) for a, n, o in ins]
+            k = next((kk for kk in range(7) if matches(ins, ufo_view(kk))), None)
+            if k is None:
+                continue
+            if ins[10][0] - at != 76 or ins[-1][0] + 6 - at != 148:
+                sys.exit('ERROR patch_bytecode: %s @%d UFO view block with unexpected lengths' % (fn, at))
+            if code[at] == op:
+                already.append('%s@%d' % (fn, at))
+            else:
+                new.append((at, k))
+        if new:
+            for at, _ in new:
+                code[at] = op
+            open(path, 'wb').write(encode(code) + raw[p:])
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+            done += ['%s@%d (values %d-%d)' % (fn, at, k, k + 1) for at, k in new]
+    return 'UFO view blocks native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
@@ -463,6 +517,7 @@ def main():
     print('SS*.bin: ' + patch_ss_ramp(data))
     print('RS*.bin: ' + patch_parallax_ramp(data))
     print('PS*.bin: ' + patch_text_loops(data))
+    print('SS*.bin: ' + patch_ufo_view(data))
 
 
 if __name__ == '__main__':

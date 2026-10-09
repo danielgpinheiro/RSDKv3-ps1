@@ -504,6 +504,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1DeformRamp", 4),
     FunctionInfo("PS1ParallaxRamp", 3),
     FunctionInfo("PS1TextLoop", 3),
+    FunctionInfo("PS1UfoView", 2),
 #endif
 };
 
@@ -936,6 +937,7 @@ enum ScrFunction {
     FUNC_PS1DEFORMRAMP,
     FUNC_PS1PARALLAXRAMP,
     FUNC_PS1TEXTLOOP,
+    FUNC_PS1UFOVIEW,
 #endif
     FUNC_MAX_CNT
 };
@@ -4527,6 +4529,33 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                 }
                 scriptEng.operands[1] = p; // the exit test's operands (WLower jt, pos0, end); the body's have at most 2
                 scriptCodePtr = scriptCodeStart + jumpTable[jumpTableStart + scriptEng.operands[0] + 1];
+                break;
+            }
+            case FUNC_PS1UFOVIEW: {
+                // The special stages' UFO-type objects (main subs) turn their position into the floor camera's frame every
+                // frame: 20 VM instructions, ~6 objects (docs/28 speed pass 2):
+                //   t0 = (XPos - layer0.XPos) >> 8; t1 = (YPos - layer0.ZPos) >> 8
+                //   t2 = Sin(angle) * t1; t3 = Cos(angle) * t0; v[k] = (t2 - t3) >> 9
+                //   t2 = Cos(angle) * t1; t3 = Sin(angle) * t0; v[k + 1] = (t2 + t3) >> 9
+                // tools/scripts/patch_bytecode.py checks the 20 instructions (148 words) and swaps only the first opcode
+                // (Equal t0, OBJECTXPOS) for this one. The same arithmetic natively (32-bit wrapping as the VM's), down to
+                // the values left (t0-t3, v[k], v[k + 1], the last instruction's operand registers), then past the block.
+                opcodeSize      = 0;
+                int B           = scriptCodePtr - 7; // the block (this instruction: 1 + 3 + 3 words)
+                const int *ck   = &scriptCode[B + 77]; // Equal OBJECTVALUEk, t2 (at B + 76): its operand 0, direct or generic
+                int *v          = ck[0] < 0 ? (int *)((char *)entity + ck[1]) : &entity->values[ck[2] - VAR_OBJECTVALUE0];
+                TileLayer *L    = &stageLayouts[0];
+                int *t          = scriptEng.tempValue;
+                t[0]            = (int)((uint)entity->XPos - (uint)L->XPos) >> 8;
+                t[1]            = (int)((uint)entity->YPos - (uint)L->ZPos) >> 8;
+                t[2]            = (int)((uint)Sin512(L->angle) * (uint)t[1]);
+                t[3]            = (int)((uint)Cos512(L->angle) * (uint)t[0]);
+                v[0]            = (int)((uint)t[2] - (uint)t[3]) >> 9;
+                t[2]            = (int)((uint)Cos512(L->angle) * (uint)t[1]);
+                t[3]            = (int)((uint)Sin512(L->angle) * (uint)t[0]);
+                v[1]            = (int)((uint)t[2] + (uint)t[3]) >> 9;
+                scriptEng.operands[0] = v[1], scriptEng.operands[1] = 9; // ShR v[k + 1], 9
+                scriptCodePtr   = B + 148;
                 break;
             }
             case FUNC_PS1TEXTLOOP: {
