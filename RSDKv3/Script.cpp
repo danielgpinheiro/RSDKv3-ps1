@@ -503,6 +503,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1SortDrawList", 2),
     FunctionInfo("PS1DeformRamp", 4),
     FunctionInfo("PS1ParallaxRamp", 3),
+    FunctionInfo("PS1TextLoop", 3),
 #endif
 };
 
@@ -934,6 +935,7 @@ enum ScrFunction {
     FUNC_PS1SORTDRAWLIST,
     FUNC_PS1DEFORMRAMP,
     FUNC_PS1PARALLAXRAMP,
+    FUNC_PS1TEXTLOOP,
 #endif
     FUNC_MAX_CNT
 };
@@ -4475,7 +4477,72 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                         --t[2];
                     } while (p < end);
                 }
+                scriptEng.operands[1] = p; // the exit test's operands (WLower jt, pos0, end); the body's have at most 2
                 scriptCodePtr = scriptCodeStart + jumpTable[jumpTableStart + scriptEng.operands[0] + 1];
+                break;
+            }
+            case FUNC_PS1TEXTLOOP: {
+                // The Credits' TextFont1-3 draw subs draw their line a character a frame in script: ~20 VM instructions
+                // and a DrawSpriteXY per character, ~350 characters a frame (~800 hblanks, docs/28 speed pass 2):
+                //   while (t1 > 0) { GetTextInfo t0, menu 0, TEXTDATA, OBJECTVALUE1, pos0
+                //     switch (t0) { default: frame = 0; if (t0 > 64) if (t0 < 91) { frame = t0; frame -= 64 }
+                //                            if (t0 > 96) if (t0 < 123) { frame = t0; frame -= 96 }
+                //                            if (frame > 0) DrawSpriteXY frame, t2, OBJECTYPOS; break
+                //                   case c: DrawSpriteXY k, t2, OBJECTYPOS; break ... }
+                //     ++pos0; --t1; t2 += 524288 }
+                // tools/scripts/patch_bytecode.py checks that shape instruction by instruction (jump tables and every case
+                // included) and swaps only the WGreater opcode for this one. The same loop natively, down to the values it
+                // leaves (the entity's frame byte, the jump stack slots the ifs and the switch push), then the loop's exit.
+                opcodeSize      = 0;
+                int W           = scriptCodePtr - 8; // this instruction (WGreater's layout: 1 + 2 + 3 + 2 words)
+                int *jt         = &jumpTable[jumpTableStart];
+                int jw          = scriptEng.operands[0];
+                int sw          = scriptCode[W + 24]; // the switch's jump table entry (GetTextInfo: 14 words)
+                int lo = jt[sw], hi = jt[sw + 1], def = jt[sw + 2];
+                const int *dc   = &scriptCode[scriptCodeStart + def]; // the default body: its ifs' jump entries
+                int *t          = scriptEng.tempValue, &p0 = scriptEng.arrayPosition[0];
+                Entity *ent     = &objectEntityList[objectLoop];
+                ObjectScript *si = &objectScriptList[ent->type];
+                TextMenu *menu  = &gameMenu[0];
+                int *js         = &jumpTableStack[jumpTableStackPos];
+                auto draw = [&](int frame) { // FUNC_DRAWSPRITEXY with operands frame, t2, the entity's YPos
+                    SpriteFrame *sf = &scriptFrames[si->frameListOffset + frame];
+                    DrawSprite((t[2] >> 16) - xScrollOffset + sf->pivotX, (ent->YPos >> 16) - yScrollOffset + sf->pivotY, sf->width, sf->height,
+                               sf->sprX, sf->sprY, si->spriteSheetID);
+                };
+                while (t[1] > 0) {
+                    js[1] = jw, js[2] = sw;
+                    t[0]       = menu->textData[menu->entryStart[ent->values[1]] + p0];
+                    int target = t[0] < lo || t[0] > hi ? def : jt[sw + 4 + (t[0] - lo)];
+                    if (target == def) {
+                        ent->frame = 0;
+                        js[3]      = dc[8];
+                        if (t[0] > 64) {
+                            js[4] = dc[16];
+                            if (t[0] < 91)
+                                ent->frame = (byte)((byte)t[0] - 64);
+                        }
+                        js[3] = dc[39];
+                        if (t[0] > 96) {
+                            js[4] = dc[47];
+                            if (t[0] < 123)
+                                ent->frame = (byte)((byte)t[0] - 96);
+                        }
+                        js[3] = dc[70];
+                        if (ent->frame > 0)
+                            draw(ent->frame);
+                    }
+                    else {
+                        draw(scriptCode[scriptCodeStart + target + 2]); // the case's DrawSpriteXY constant
+                    }
+                    ++p0;
+                    --t[1];
+                    t[2] += 524288;
+                    // the operand registers the loop's instructions leave: the last GetTextInfo's 4th and 5th
+                    scriptEng.operands[3] = ent->values[1], scriptEng.operands[4] = p0 - 1;
+                }
+                scriptEng.operands[1] = t[1]; // and the exit test's (WGreater jw, t1, 0)
+                scriptCodePtr = scriptCodeStart + jt[jw + 1];
                 break;
             }
             case FUNC_PS1DEFORMRAMP: {

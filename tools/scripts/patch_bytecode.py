@@ -344,12 +344,125 @@ def patch_parallax_ramp(data):
     return 'parallax ramp native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
+# The Credits' TextFont1-3 draw subs: a character-by-character text loop (docs/28 speed pass 2, ~800 hblanks a frame).
+# Only the loop's WGreater opcode becomes PS1TextLoop (RSDKv3/Script.cpp runs the loop natively); the whole shape is
+# checked here: the instructions below, the switch's jump table (default right after the switch, exit after
+# endswitch, every case target either the default or a 'DrawSpriteXY k, TEMPVALUE2, OBJECTYPOS / break' body) and the
+# loop's exit after its 'loop'.
+V = lambda n: ('var', (n, 0))
+TEXT_HEAD = [
+    ('WGreater', [('int', None), V('TEMPVALUE1'), ('int', 0)]),
+    ('GetTextInfo', [V('TEMPVALUE0'), ('int', 0), ('int', 0), V('OBJECTVALUE1'), V('ARRAYPOS0')]),
+    ('switch', [('int', None), V('TEMPVALUE0')]),
+    ('Equal', [V('OBJECTFRAME'), ('int', 0)]),
+    ('IfGreater', [('int', None), V('TEMPVALUE0'), ('int', 64)]),
+    ('IfLower', [('int', None), V('TEMPVALUE0'), ('int', 91)]),
+    ('Equal', [V('OBJECTFRAME'), V('TEMPVALUE0')]),
+    ('Sub', [V('OBJECTFRAME'), ('int', 64)]),
+    ('endif', []), ('endif', []),
+    ('IfGreater', [('int', None), V('TEMPVALUE0'), ('int', 96)]),
+    ('IfLower', [('int', None), V('TEMPVALUE0'), ('int', 123)]),
+    ('Equal', [V('OBJECTFRAME'), V('TEMPVALUE0')]),
+    ('Sub', [V('OBJECTFRAME'), ('int', 96)]),
+    ('endif', []), ('endif', []),
+    ('IfGreater', [('int', None), V('OBJECTFRAME'), ('int', 0)]),
+    ('DrawSpriteXY', [V('OBJECTFRAME'), V('TEMPVALUE2'), V('OBJECTYPOS')]),
+    ('endif', []),
+    ('break', []),
+]
+TEXT_CASE = [('DrawSpriteXY', [('int', None), V('TEMPVALUE2'), V('OBJECTYPOS')]), ('break', [])]
+TEXT_TAIL = [('endswitch', []), ('Inc', [V('ARRAYPOS0')]), ('Dec', [V('TEMPVALUE1')]), ('Add', [V('TEMPVALUE2'), ('int', 524288)]),
+             ('loop', [])]
+
+
+def matches(ins, template):
+    """ins (instructions()) against a template: names and operand kinds equal, values equal unless the template's is None."""
+    if len(ins) != len(template):
+        return False
+    for (_, n, ops), (tn, tops) in zip(ins, template):
+        if n != tn or len(ops) != len(tops):
+            return False
+        for o, (tk, tv) in zip(ops, tops):
+            if o[0] != tk or (tv is not None and o[1] != tv):
+                return False
+    return True
+
+
+def patch_text_loops(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, wgreater = nm.index('PS1TextLoop'), nm.index('WGreater')
+    bc = os.path.join(data, 'Scripts', 'ByteCode')
+    graw = open(os.path.join(bc, 'GS000.bin'), 'rb').read()
+    gcode, gp = bs.blocks(graw, 0)
+    gjt, _ = bs.blocks(graw, gp)
+    done, already = [], []
+    for fn in sorted(os.listdir(bc)):
+        if not fn.startswith('PS'):
+            continue
+        path = os.path.join(bc, fn)
+        raw = open(path, 'rb').read()
+        fcode, p = bs.blocks(raw, 0)
+        fjt, _ = bs.blocks(raw, p)
+        code, jtab = list(gcode) + list(fcode), list(gjt) + list(fjt)  # sub / jump pointers count from GS000's start
+        subs = [(c, j) for cs, js in zip(bs.subs(path), bd.jump_tables(path)[1]) for c, j in zip(cs, js) if 0 <= c < len(code)]
+        hits = []
+        for at in range(len(gcode), len(code)):
+            if code[at] not in (wgreater, op):
+                continue
+            try:
+                head = instructions(code, at, names, vars_)[:len(TEXT_HEAD)]
+            except (IndexError, KeyError):
+                continue
+            if not matches([(a, 'WGreater' if n == 'PS1TextLoop' else n, o) for a, n, o in head], TEXT_HEAD):
+                continue
+            start, jstart = max((c, j) for c, j in subs if c <= at)  # the sub holding the loop
+            jw, sw = head[0][2][0][1], head[2][2][0][1]
+            lo, hi, dflt, end = jtab[jstart + sw:jstart + sw + 4]
+            err = lambda m: sys.exit('ERROR patch_bytecode: %s @%d text loop: %s' % (fn, at, m))
+            if start + dflt != head[3][0]:
+                err('switch default is not after the switch')
+            pos = head[-1][0] + 1
+            cases = set()
+            while code[pos] == nm.index('DrawSpriteXY'):
+                c = instructions(code, pos, names, vars_)[:2]
+                if not matches(c, TEXT_CASE):
+                    err('case body at %d' % pos)
+                cases.add(pos - start)
+                pos = c[1][0] + 1
+            tail = instructions(code, pos, names, vars_)[:len(TEXT_TAIL)]
+            if not matches(tail, TEXT_TAIL):
+                err('loop tail')
+            if start + end != tail[1][0] or start + jtab[jstart + jw + 1] != tail[-1][0] + 1 or start + jtab[jstart + jw] != at:
+                err('switch exit / loop jump entries')
+            for k in range(hi - lo + 1):
+                tgt = jtab[jstart + sw + 4 + k]
+                if tgt != dflt and tgt not in cases:
+                    err('case %d target %d' % (lo + k, tgt))
+            # the default body's if offsets the engine reads (dc[8], dc[16], dc[39], dc[47], dc[70]) are the ifs' entries
+            d0 = head[3][0]
+            if [head[i][0] - d0 for i in (4, 5, 10, 11, 16)] != [6, 14, 37, 45, 68] or head[2][0] != at + 22:
+                err('instruction offsets')
+            hits.append((at, head[0][1] == 'PS1TextLoop'))
+        new = [a for a, w in hits if not w]
+        already += ['%s@%d' % (fn, a - len(gcode)) for a, w in hits if w]
+        if new:
+            for a in new:
+                code[a] = op
+            fcode2 = code[len(gcode):]
+            open(path, 'wb').write(encode(fcode2) + raw[p:])
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == fcode2
+            done += ['%s@%d' % (fn, a - len(gcode)) for a in new]
+    return 'text loops native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
     print('SS*.bin: ' + patch_ss_sort(data))
     print('SS*.bin: ' + patch_ss_ramp(data))
     print('RS*.bin: ' + patch_parallax_ramp(data))
+    print('PS*.bin: ' + patch_text_loops(data))
 
 
 if __name__ == '__main__':
