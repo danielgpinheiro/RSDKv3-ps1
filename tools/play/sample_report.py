@@ -128,10 +128,10 @@ for want in lines_for:
     if not per:
         continue
     addrs = sorted(per)
-    res = subprocess.run(['mipsel-none-elf-addr2line', '-e', elf] + ['0x%x' % a for a in addrs], capture_output=True, text=True).stdout.split()
+    res = subprocess.run(['mipsel-none-elf-addr2line', '-e', elf] + ['0x%x' % a for a in addrs], capture_output=True, text=True).stdout.splitlines()
     by_line = defaultdict(int)
     for a, ln in zip(addrs, res):
-        by_line[ln.split('/')[-1]] += per[a]
+        by_line[ln.split('/')[-1].split(' (')[0]] += per[a]
     print('\n== lines of %s ==' % want)
     for ln, c in sorted(by_line.items(), key=lambda x: -x[1])[:top]:
         print('%7.2f  %s' % (c * scale, ln))

@@ -10,6 +10,7 @@
 #                         + OUT_funcs.bin (tools/play/sample_report.py OUT)
 #   CHECK="f1 f2 ..."     at these frames dump the logic state (OUT_state_F.bin: entities, players, script engine,
 #                         globals) and VRAM (OUT_F_vram.bin) for A/B checks (tools/play/ab_compare.py)
+#   EXTRA="gdb lines"     also run at each CHECK frame (\n-separated), e.g. a printf of counters
 #   NOBUILD=1             run the EXE as it is (an A/B snapshot: EXE=path ELF=path)
 #   EMU=ds                DuckStation (retail BIOS; only when no other session runs it): timing only
 set -u
@@ -54,6 +55,7 @@ EMU=${EMU:-redux}
     echo "  append binary memory ${OUT}_state_$c.bin &scriptEng (&scriptEng+1)"
     echo "  append binary memory ${OUT}_state_$c.bin &globalVariables[0] &globalVariables[sizeof(globalVariables)/sizeof(globalVariables[0])]"
     echo "  printf \"CHECK %u stage=%s cam=%d,%d\\n\", g_ps1PerfFrames, stageList[activeStageList][stageListPosition].folder, xScrollOffset, yScrollOffset"
+    [ -n "${EXTRA:-}" ] && printf '%b\n' "$EXTRA"
     [ "$EMU" != ds ] && echo "  shell REDUX_WEB=\$WEB python3 tools/vramshot.py ${OUT}_$c >/dev/null"
     echo "end"
   done
@@ -101,6 +103,6 @@ else
   timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
   redux_stop
 fi
-grep -E "^(RUN|GUARDS|SAMPLES|CHECK|FROM|SKIPPED) " "$OUT.gdb.log" || { echo "NO RESULT ($OUT.gdb.log)"; tail -5 "$OUT.gdb.log"; }
+grep -E "^(RUN|GUARDS|SAMPLES|CHECK|FROM|SKIPPED|X) " "$OUT.gdb.log" || { echo "NO RESULT ($OUT.gdb.log)"; tail -5 "$OUT.gdb.log"; }
 grep -E "^OBJ " "$OUT.gdb.log" > "${OUT}_scripts.txt" 2>/dev/null
 true

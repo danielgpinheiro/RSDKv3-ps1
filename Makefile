@@ -73,7 +73,7 @@ CPPFLAGS += -DPS1_SAMPLE=1
 endif
 PS1_SAMPLE_OBJS := RSDKv3/main.o RSDKv3/Script.o ps1/pc_sampler.o
 # (make 3.81 compares whole seconds: the objects are deleted rather than trusted to be older than the stamp)
-$(shell mkdir -p build/gen; [ "$$(cat build/gen/sample.txt 2>/dev/null)" = "$(SAMPLE)" ] || { echo "$(SAMPLE)" > build/gen/sample.txt; rm -f $(PS1_SAMPLE_OBJS); })
+$(shell mkdir -p build/gen; [ -f build/gen/sample.txt ] && [ "$$(cat build/gen/sample.txt)" = "$(SAMPLE)" ] || { echo "$(SAMPLE)" > build/gen/sample.txt; rm -f $(PS1_SAMPLE_OBJS); })
 
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)
