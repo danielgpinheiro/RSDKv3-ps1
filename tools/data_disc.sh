@@ -6,10 +6,15 @@
 # LANG_DISC = en (default) or jp: one disc per language (docs/28 phase 4).
 set -eu
 cd "$(dirname "$0")/.."
+# The JP soundtrack's FMV audio with the vocal songs (tester report 2026-10-10): JP_VIDEOS (default: the "videos JPN"
+# folder next to the extracted data when it is there; JP_VIDEOS= turns it off).
+JP_VIDEOS=${JP_VIDEOS-../SonicCD_Extracted/videos JPN}
+JP=()
+[ -n "$JP_VIDEOS" ] && [ -d "$JP_VIDEOS" ] && JP=(--jp-videos "$JP_VIDEOS")
 if [ -n "${DATA:-}" ]; then
-  /usr/bin/python3 tools/build_assets.py --data "$DATA" --lang "${LANG_DISC:-en}"
+  /usr/bin/python3 tools/build_assets.py --data "$DATA" --lang "${LANG_DISC:-en}" "${JP[@]+"${JP[@]}"}"
 else
-  /usr/bin/python3 tools/build_assets.py --rsdk "${RSDK:-../SonicCD_Extracted/Data.rsdk}" --lang "${LANG_DISC:-en}"
+  /usr/bin/python3 tools/build_assets.py --rsdk "${RSDK:-../SonicCD_Extracted/Data.rsdk}" --lang "${LANG_DISC:-en}" "${JP[@]+"${JP[@]}"}"
 fi
 /usr/bin/python3 tools/disc/gen_load_order.py build/iso/Data  # disc layout in load order (docs/28 phase 9)
 make -s disc
