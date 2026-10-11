@@ -525,6 +525,19 @@ static void mdecRun() {
     if (!s_direct)
         want = MDEC_DMA; // the whole-frame path (plain STRs) keeps DMA1's re-ordering
     bool ok = want == s_mdecModeInit || mdecSetMode(want);
+    // A mode whose setup fails is skipped within the same picture (PIO -> hybrid -> DMA): an emulator without CPU
+    // access to the MDEC (PCSX-ReARMed: MDEC0 writes only set the command, the status never shows the FIFOs) then
+    // starts its first picture in DMA mode, with no fault counted and no diagnostics strip forced on. Where the setup
+    // works (hardware, DuckStation, PCSX-Redux) nothing changes.
+    for (int tries = 0; !ok && forced < 0 && s_direct && tries < 2; tries++) {
+        mdecFail(1, (int)want, 0, 0, 0); // the first one is kept for the strip
+        DecDCTAbort(0);
+        want              = want == MDEC_PIO ? MDEC_HYBRID : want == MDEC_HYBRID ? MDEC_DMA : MDEC_PIO;
+        g_ps1MdecMode     = want;
+        s_mdecModeInit    = 0xff;
+        g_ps1MdecSwitches = g_ps1MdecSwitches + 1;
+        ok                = mdecSetMode(want);
+    }
     if (!ok)
         mdecFail(1, (int)want, 0, 0, 0);
     if (ok)
