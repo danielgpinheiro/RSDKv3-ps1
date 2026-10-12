@@ -1622,6 +1622,28 @@ static void PS1FadeHook()
         PS1ChainAlphaRect(0, 0, SCREEN_XSIZE, SCREEN_YSIZE, s_fadeR, s_fadeG, s_fadeB, level);
 }
 
+// Tester report 2026-10-12 (Tidal Tempest's vertical loop, Metallic Madness 2): the GPU's vertex coordinates are 11-bit
+// signed, so a sprite ~2048 px away wrapped onto the screen (R42's water surface parked at Y 3072 in the shaft, far
+// objects in R82's 8448 x 2048 maps). Upstream clips every sprite to the screen; a sprite wholly off it is skipped here
+// (the RSDKv4 port's PS1SpriteOffScreen, its phase 7.2b), and the pieces of a rotated one wholly off it too.
+volatile uint32_t g_ps1SpriteCull = 1; // GDB: 0 = draw off-screen sprites too (the A/B of this cull)
+// (evidence, GDB) sprites culled that the GPU would have wrapped onto the screen (a corner past +-1024), the last one's
+// position and the object drawing it (objectEntityList[objectLoop].type)
+volatile uint32_t g_ps1SpriteWrapCulls = 0, g_ps1SpriteWrapLast = 0, g_ps1SpriteWrapType = 0;
+static inline bool PS1SpriteOffScreen(int x, int y, int w, int h)
+{
+    if (!g_ps1SpriteCull || !(x >= SCREEN_XSIZE || y >= SCREEN_YSIZE || x + w <= 0 || y + h <= 0))
+        return false;
+    // (counted only when the GPU's 11-bit wrap would have put it on the screen)
+    int wx = ((x + 1024) & 2047) - 1024, wy = ((y + 1024) & 2047) - 1024;
+    if ((wx != x || wy != y) && wx < SCREEN_XSIZE && wy < SCREEN_YSIZE && wx + w > 0 && wy + h > 0) {
+        g_ps1SpriteWrapCulls = g_ps1SpriteWrapCulls + 1;
+        g_ps1SpriteWrapLast  = (uint32_t)(uint16_t)x | (uint32_t)(uint16_t)y << 16;
+        g_ps1SpriteWrapType  = objectEntityList[objectLoop].type;
+    }
+    return true;
+}
+
 void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int B, int A)
 {
     if (A <= 0 || width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
@@ -1636,6 +1658,15 @@ void DrawRectangle(int XPos, int YPos, int width, int height, int R, int G, int 
         s_fadeR = R, s_fadeG = G, s_fadeB = B, s_fadeA = A;
         PS1ChainSetHook(PS1FadeHook);
         return;
+    }
+    // clipped to the screen as upstream's DrawRectangle (the tester report above: GPU coordinates wrap past +-1024)
+    if (g_ps1SpriteCull) {
+        int x1 = XPos + width, y1 = YPos + height;
+        XPos = XPos < 0 ? 0 : XPos, YPos = YPos < 0 ? 0 : YPos;
+        x1 = x1 > SCREEN_XSIZE ? SCREEN_XSIZE : x1, y1 = y1 > SCREEN_YSIZE ? SCREEN_YSIZE : y1;
+        if (x1 <= XPos || y1 <= YPos)
+            return;
+        width = x1 - XPos, height = y1 - YPos;
     }
     int level = PS1AlphaLevel(A == 0xFF ? 0xFF : A);
     if (level)
@@ -1668,7 +1699,7 @@ volatile uint32_t g_ps1FrameCacheHits = 0;
 
 void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, int sheetID)
 {
-    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
+    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden() || PS1SpriteOffScreen(XPos, YPos, width, height))
         return;
     int sheet = PS1SurfaceSheet(sheetID); // (also clears the caches when the surfaces or the atlas change)
     if (sheet >= 0 && s_ink == PS1_INK_OPAQUE) {
@@ -1711,7 +1742,7 @@ void DrawSprite(int XPos, int YPos, int width, int height, int sprX, int sprY, i
 
 void DrawSpriteFlipped(int XPos, int YPos, int width, int height, int sprX, int sprY, int direction, int sheetID)
 {
-    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden())
+    if (width <= 0 || height <= 0 || !s_frameOpen || PS1ObjectsHidden() || PS1SpriteOffScreen(XPos, YPos, width, height))
         return;
     bool fx = direction & FLIP_X, fy = direction & FLIP_Y;
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
@@ -1766,12 +1797,16 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         int16_t xs[4], ys[4];
         const int lx[4] = { p.ox, p.ox + p.w, p.ox, p.ox + p.w };
         const int ly[4] = { p.oy, p.oy, p.oy + p.h, p.oy + p.h };
+        int x0 = 0x7FFF, x1 = -0x8000, y0 = 0x7FFF, y1 = -0x8000;
         for (int k = 0; k < 4; ++k) {
             int x = fx ? pivotX - lx[k] : lx[k] - pivotX;
             int y = ly[k] - pivotY;
-            xs[k] = (int16_t)(XPos + ((x * cs + y * sn) >> 9));
-            ys[k] = (int16_t)(YPos + ((y * cs - x * sn) >> 9));
+            int sx = XPos + ((x * cs + y * sn) >> 9), sy = YPos + ((y * cs - x * sn) >> 9);
+            xs[k] = (int16_t)sx, ys[k] = (int16_t)sy;
+            x0 = sx < x0 ? sx : x0, x1 = sx > x1 ? sx : x1, y0 = sy < y0 ? sy : y0, y1 = sy > y1 ? sy : y1;
         }
+        if (PS1SpriteOffScreen(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) // (the tester report above: no wrapped quad)
+            return;
         PS1ChainPieceQuad(p, xs, ys, p.u, p.u + p.w, p.v, p.v + p.h);
     });
 }
