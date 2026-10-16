@@ -139,6 +139,6 @@ for c in ${GPU:-}; do
   [ -n "$h" ] && [ -f "${OUT}_gpu_$c.ram" ] || { echo "GPUCOST $c none"; continue; }
   /usr/bin/python3 tools/play/gpu_cost.py "${OUT}_gpu_$c.ram" $h --top 12 > "${OUT}_gpu_$c.txt"
   echo "GPUCOST $c $(grep '^SUM ' "${OUT}_gpu_$c.txt" | cut -c5-)"
-  rm -f "${OUT}_gpu_$c.ram"
+  [ "${KEEP_RAM:-0}" = 1 ] || rm -f "${OUT}_gpu_$c.ram"
 done
 true
