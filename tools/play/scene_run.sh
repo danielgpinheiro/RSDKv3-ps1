@@ -111,7 +111,7 @@ rm -f "${OUT}_samples.bin"
 if [ "$EMU" = ds ]; then
   . tools/ds_env.sh
   ds_start "$OUT" "$EXE"
-  timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
+  timeout ${TIMEOUT:-900} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
   ds_stop
 else
   . tools/redux_env.sh
@@ -122,7 +122,7 @@ else
     "$REDUX_BIN" $REDUX_ARGS -iso "${DISC:-build/game.cue}" -exe "$EXE" >/dev/null 2>&1 &
     REDUX_PID=$!
     sleep 4
-    timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
+    timeout ${TIMEOUT:-900} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb.in" > "$OUT.gdb.log" 2>&1
     redux_stop
     grep -q "^RUN " "$OUT.gdb.log" && break
   done
