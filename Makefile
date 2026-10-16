@@ -77,11 +77,11 @@ $(shell mkdir -p build/gen; [ -f build/gen/sample.txt ] && [ "$$(cat build/gen/s
 
 # `make PERF_SPLIT=1`: GPU tail, flip gap and window sums of the section counters in RSDKv3/main.cpp (docs/43; tools/play/scene_run.sh prints them):
 # harness only. Rebuilds main.o and relinks when switched (build/gen/perfsplit.txt; the ELF goes too: make 3.81 compares
-# whole seconds).
+# whole seconds). The EXE is always re-made from the ELF (one objcopy) for the same reason.
 ifneq ($(PERF_SPLIT),)
 CPPFLAGS += -DPS1_PERF_SPLIT=1
 endif
-$(shell mkdir -p build/gen; [ -f build/gen/perfsplit.txt ] && [ "$$(cat build/gen/perfsplit.txt)" = "$(PERF_SPLIT)" ] || { echo "$(PERF_SPLIT)" > build/gen/perfsplit.txt; rm -f RSDKv3/main.o rsdkv3.elf rsdkv3.ps-exe; })
+$(shell mkdir -p build/gen; [ -f build/gen/perfsplit.txt ] && [ "$$(cat build/gen/perfsplit.txt)" = "$(PERF_SPLIT)" ] || { echo "$(PERF_SPLIT)" > build/gen/perfsplit.txt; rm -f RSDKv3/main.o rsdkv3.elf; })
 
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)
@@ -98,6 +98,7 @@ CXXFLAGS = -std=c++20
 include ../nugget/psyqo/psyqo.mk
 $(PS1_SAMPLE_OBJS): build/gen/sample.txt
 RSDKv3/main.o: build/gen/perfsplit.txt
+.PHONY: rsdkv3.ps-exe
 
 # The R3000A has no FPU and the engine uses float: soft-float + libgcc's helpers. Must come
 # AFTER the include so it overrides common.mk's -mfp32 ARCHFLAGS.
