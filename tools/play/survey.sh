@@ -2,7 +2,8 @@
 # Speed survey (docs/28 speed pass 2): for each scene, a BOOT= build and a scripted run (tools/play/scene_run.sh),
 # frames FROM..TO; prints / appends "RUN ..." lines to OUT/survey.txt. With SNAP=1 the EXE + ELF of each scene are kept
 # in OUT/snap/ (the A/B reference: NOBUILD=1 EXE=... ELF=...). Pad scripts: pad_for SCENE.
-# Usage: tools/play/survey.sh OUT SCENE[:BOOT_ID]...   (FROM=300 TO=1200; CHECK=frames; EMU=ds)
+# Usage: tools/play/survey.sh OUT SCENE[:BOOT_ID]...   (FROM=300 TO=1200; CHECK=frames; EMU=ds; GPU=frames;
+# PERF_SPLIT=1: tools/play/scene_run.sh)
 set -u
 cd "$(dirname "$0")/../.."
 OUT=$1; shift
@@ -28,6 +29,6 @@ for sc in "$@"; do
     [ "${SNAP:-0}" = 1 ] && cp rsdkv3.ps-exe "$OUT/snap/$tag.ps-exe" && cp rsdkv3.elf "$OUT/snap/$tag.elf"
   fi
   r=$(grep -E "^RUN " "$OUT/$tag.txt" || echo "RUN $tag (no result)")
-  g=$(grep -E "^(SKIPPED|GUARDS) " "$OUT/$tag.txt" | tr '\n' ' ')
+  g=$(grep -E "^(SKIPPED|GUARDS|SPLIT|GPUCOST) " "$OUT/$tag.txt" | tr '\n' ' ')
   echo "$tag $r | $g" | tee -a "$OUT/survey.txt"
 done

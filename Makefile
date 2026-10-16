@@ -75,6 +75,14 @@ PS1_SAMPLE_OBJS := RSDKv3/main.o RSDKv3/Script.o ps1/pc_sampler.o
 # (make 3.81 compares whole seconds: the objects are deleted rather than trusted to be older than the stamp)
 $(shell mkdir -p build/gen; [ -f build/gen/sample.txt ] && [ "$$(cat build/gen/sample.txt)" = "$(SAMPLE)" ] || { echo "$(SAMPLE)" > build/gen/sample.txt; rm -f $(PS1_SAMPLE_OBJS); })
 
+# `make PERF_SPLIT=1`: GPU tail, flip gap and window sums of the section counters in RSDKv3/main.cpp (docs/43; tools/play/scene_run.sh prints them):
+# harness only. Rebuilds main.o and relinks when switched (build/gen/perfsplit.txt; the ELF goes too: make 3.81 compares
+# whole seconds).
+ifneq ($(PERF_SPLIT),)
+CPPFLAGS += -DPS1_PERF_SPLIT=1
+endif
+$(shell mkdir -p build/gen; [ -f build/gen/perfsplit.txt ] && [ "$$(cat build/gen/perfsplit.txt)" = "$(PERF_SPLIT)" ] || { echo "$(PERF_SPLIT)" > build/gen/perfsplit.txt; rm -f RSDKv3/main.o rsdkv3.elf rsdkv3.ps-exe; })
+
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)
 CPPFLAGS += -DPS1_MEMCARD_TEST=1
@@ -89,6 +97,7 @@ CXXFLAGS = -std=c++20
 # This activates the PSYQo library and the rest of the toolchain.
 include ../nugget/psyqo/psyqo.mk
 $(PS1_SAMPLE_OBJS): build/gen/sample.txt
+RSDKv3/main.o: build/gen/perfsplit.txt
 
 # The R3000A has no FPU and the engine uses float: soft-float + libgcc's helpers. Must come
 # AFTER the include so it overrides common.mk's -mfp32 ARCHFLAGS.
@@ -132,6 +141,7 @@ LICENSE ?= ../LICENSE.DAT
 dist:
 	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1BootBuild; then echo "dist: rsdkv3.ps-exe is a BOOT= test build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1SampleRing; then echo "dist: rsdkv3.ps-exe is a SAMPLE= build"; exit 1; fi
+	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1PerfGpuTail; then echo "dist: rsdkv3.ps-exe is a PERF_SPLIT build"; exit 1; fi
 	@lang=$$(/usr/bin/python3 -c "print({0: 'EN', 5: 'JP'}.get(open('build/iso/Data/Game/PS1Language.bin', 'rb').read()[0], 'XX'))"); \
 	mkdir -p build/dist && \
 	/usr/bin/python3 tools/disc/build_disc.py build/iso rsdkv3.ps-exe $(LICENSE) build/dist/SonicCD-PS1-$$lang && \
