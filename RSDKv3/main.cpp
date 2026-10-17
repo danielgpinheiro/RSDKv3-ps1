@@ -19,6 +19,7 @@
 #include <psyqo/gpu.hh>
 
 #include "../ps1/loading.hh"
+#include "../ps1/test_mode.hh"
 #include "../ps1/video.hh"
 
 extern "C" char __heap_start, __stack_start;
@@ -205,6 +206,13 @@ class RSDKv3PS1App final : public psyqo::Application {
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);
 #endif
+#if PS1_TEST
+        PS1TestInit(); // TEST.SEL: the scenario (docs/45)
+        if (PS1TestBootStage()) {
+            StrCopy(Engine.startSceneFolder, PS1TestBootFolder());
+            StrCopy(Engine.startSceneID, PS1TestBootId());
+        }
+#endif
         PS1DetectGpuVersion(); // flip-bit sprites for flipped tiles on the new GPU (ps1/render.cpp, docs/43 G3)
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         Engine.Init();
@@ -214,6 +222,13 @@ class RSDKv3PS1App final : public psyqo::Application {
         // Stage Select does (BOOT_GAMEMODE, default 0).
         SetGlobalVariableByName("Options.GameMode", PS1_BOOT_GAMEMODE);
         playerListPos = PS1_BOOT_PLAYER; // 0 Sonic, 1 Tails (the menu sets it; per-player atlas, docs/28 3.2)
+#endif
+#if PS1_TEST
+        if (PS1TestBootStage()) { // as a BOOT= build (above): the Stage Select's game mode, the scenario's player
+            SetGlobalVariableByName("Options.GameMode", PS1TestBootMode());
+            playerListPos = PS1TestBootPlayer();
+        }
+        PS1TestAfterInit();
 #endif
         PS1LoadingEnd();
         g_ps1InitDone = 1;
@@ -229,6 +244,9 @@ class RSDKv3PS1App final : public psyqo::Application {
         PS1SpuDebugService();
         PS1VideoTestService(); // GDB: g_ps1VideoTestPlay
         PS1SaveTestService();  // GDB: g_ps1SaveTest
+#if PS1_TEST
+        PS1TestPreFrame(); // input track, pokes
+#endif
         PS1RenderBeginFrame(gpu()); // all drawing is DMA-chained; psyqo sends it after frame() returns
         Engine.RunFrame();
         PS1RenderEndFrame();
@@ -246,6 +264,9 @@ class RSDKv3PS1App final : public psyqo::Application {
             PS1VramCrc();
 #endif
         PS1PerfTick(gpu());
+#if PS1_TEST
+        PS1TestPostFrame(); // telemetry, checkpoints, end of the run
+#endif
 #ifdef PS1_PERF_SPLIT
         s_ps1FrameEnd = PS1Hblanks();
 #endif

@@ -84,6 +84,15 @@ CPPFLAGS += -DPS1_PERF_SPLIT=1
 endif
 $(shell mkdir -p build/gen; [ -f build/gen/perfsplit.txt ] && [ "$$(cat build/gen/perfsplit.txt)" = "$(PERF_SPLIT)" ] || { echo "$(PERF_SPLIT)" > build/gen/perfsplit.txt; rm -f RSDKv3/main.o rsdkv3.elf; })
 
+# `make TEST=1`: the regression test mode (ps1/test_mode.cpp, ../docs/45; the scenario comes from the test disc's
+# Data/TEST.SEL, written by ../tests/run.py): harness only, make dist and tools/export_builder.sh refuse it. Rebuilds
+# main.o and relinks when switched (build/gen/test.txt), as PERF_SPLIT.
+ifeq ($(TEST),1)
+CPPFLAGS += -DPS1_TEST=1
+SRCS += ps1/test_mode.cpp
+endif
+$(shell mkdir -p build/gen; [ -f build/gen/test.txt ] && [ "$$(cat build/gen/test.txt)" = "$(TEST)" ] || { echo "$(TEST)" > build/gen/test.txt; rm -f RSDKv3/main.o rsdkv3.elf; })
+
 # `make MEMCARD_TEST=1`: memory card self-test (ps1/memcard_test.cpp; tools/memcard/selftest.sh).
 ifeq ($(MEMCARD_TEST),1)
 CPPFLAGS += -DPS1_MEMCARD_TEST=1
@@ -143,6 +152,7 @@ LICENSE ?= ../LICENSE.DAT
 dist:
 	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1BootBuild; then echo "dist: rsdkv3.ps-exe is a BOOT= test build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1SampleRing; then echo "dist: rsdkv3.ps-exe is a SAMPLE= build"; exit 1; fi
+	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1TestBuild; then echo "dist: rsdkv3.ps-exe is a TEST=1 build"; exit 1; fi
 	@if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1PerfGpuTail; then echo "dist: rsdkv3.ps-exe is a PERF_SPLIT build"; exit 1; fi
 	@lang=$$(/usr/bin/python3 -c "print({0: 'EN', 5: 'JP'}.get(open('build/iso/Data/Game/PS1Language.bin', 'rb').read()[0], 'XX'))"); \
 	mkdir -p build/dist && \

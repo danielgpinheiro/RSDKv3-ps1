@@ -11,6 +11,9 @@ cd "$(dirname "$0")/.."
 if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1BootBuild; then
   echo "rsdkv3.ps-exe is a BOOT= test build: run make first"; exit 1
 fi
+if mipsel-none-elf-nm rsdkv3.elf | grep -q g_ps1TestBuild; then
+  echo "rsdkv3.ps-exe is a TEST=1 build: run make first"; exit 1
+fi
 B=$DEST/builder
 rm -rf "$B"
 mkdir -p "$B/tools" "$B/RSDKv3" "$DEST/bin" "$DEST/sources/psxpress"
