@@ -511,6 +511,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1HudDraw", 3),
     FunctionInfo("PS1RingTouch", 3),
     FunctionInfo("PS1WaterDraw", 1),
+    FunctionInfo("PS1WaterPalette", 1),
 #endif
 };
 
@@ -950,6 +951,7 @@ enum ScrFunction {
     FUNC_PS1HUDDRAW,
     FUNC_PS1RINGTOUCH,
     FUNC_PS1WATERDRAW,
+    FUNC_PS1WATERPALETTE,
 #endif
     FUNC_MAX_CNT
 };
@@ -4917,6 +4919,42 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     PS1OpDrawSpriteInk(scriptInfo, entity, spriteFrame, T[0], T[1]);
                 }
                 scriptCodePtr = B + 148; // its End
+                break;
+            }
+            case FUNC_PS1WATERPALETTE: {
+                // Tidal Tempest's BGEffects draw sub (RS020-RS029: the water's deformation offsets and the palette split at
+                // the water line, every frame, docs/43 C2). tools/scripts/patch_bytecode.py checks the whole sub (17
+                // instructions, 98 words) and swaps only its first opcode (Inc OBJECTVALUE0) for this one. The same sub
+                // natively, statement by statement (byte-wide deformation offsets as the VM writes them back, jump-stack
+                // slots, temp values and operand registers as it leaves them).
+                opcodeSize = 0;
+                int B      = scriptCodePtr - 4; // this instruction (Inc's layout: 1 + 3 words)
+                int *js    = &jumpTableStack[jumpTableStackPos];
+                int *v     = entity->values;
+                int *ops   = scriptEng.operands;
+                int *T     = scriptEng.tempValue;
+                ops[0] = ++v[0];                                  // Inc OBJECTVALUE0
+                ops[0] = 0, ops[1] = v[0], ops[2] = 1, js[1] = 0; // IfGreater 0, OBJECTVALUE0, 1
+                if (v[0] > 1) {
+                    ops[0] = stageLayouts[0].deformationOffsetW + 1; // Inc TILELAYERDEFORMATIONOFFSETW[0]
+                    stageLayouts[0].deformationOffsetW = ops[0] & 0xFF;
+                    ops[0] = stageLayouts[2].deformationOffsetW + 1; // Inc TILELAYERDEFORMATIONOFFSETW[2]
+                    stageLayouts[2].deformationOffsetW = ops[0] & 0xFF;
+                    ops[0] = ops[1] = v[0] = 0;                     // Equal OBJECTVALUE0, 0
+                }
+                ops[0] = ops[1] = T[0] = waterLevel;                          // Equal TEMPVALUE0, STAGEWATERLEVEL
+                ops[0] = T[0] = T[0] - yScrollOffset, ops[1] = yScrollOffset; // Sub TEMPVALUE0, SCREENYOFFSET
+                ops[0] = 2, ops[1] = T[0], ops[2] = 0, js[1] = 2;              // IfLower 2, TEMPVALUE0, 0
+                if (T[0] < 0)
+                    ops[0] = ops[1] = T[0] = 0;
+                ops[0] = 4, ops[1] = T[0], ops[2] = SCREEN_YSIZE, js[1] = 4;   // IfGreater 4, TEMPVALUE0, SCREENYSIZE
+                if (T[0] > SCREEN_YSIZE)
+                    ops[0] = ops[1] = T[0] = SCREEN_YSIZE;
+                ops[0] = objectEntityList[19].values[1], ops[1] = 0, ops[2] = T[0]; // SetActivePalette OBJECTVALUE1[19], 0, T0
+                SetActivePalette(ops[0], ops[1], ops[2]);
+                ops[0] = 7, ops[1] = T[0], ops[2] = SCREEN_YSIZE;              // SetActivePalette 7, TEMPVALUE0, SCREENYSIZE
+                SetActivePalette(ops[0], ops[1], ops[2]);
+                scriptCodePtr = B + 97; // its End
                 break;
             }
             case FUNC_PS1UFOVIEW: {

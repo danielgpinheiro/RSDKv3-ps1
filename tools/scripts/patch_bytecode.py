@@ -936,6 +936,56 @@ def patch_water_draw(data):
     return 'Water draw native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
 
 
+# Tidal Tempest's BGEffects draw sub (RS020-RS029; docs/43 C2): only its first Inc opcode becomes PS1WaterPalette.
+def water_palette():
+    I = lambda v: ('int', v)
+    L = lambda i: ('var', ('TILELAYERDEFORMATIONOFFSETW', 1, (0, i)))
+    T0 = V('TEMPVALUE0')
+    return [('Inc', [V('OBJECTVALUE0')]), ('IfGreater', [I(0), V('OBJECTVALUE0'), I(1)]), ('Inc', [L(0)]), ('Inc', [L(2)]),
+            ('Equal', [V('OBJECTVALUE0'), I(0)]), ('endif', []),
+            ('Equal', [T0, V('STAGEWATERLEVEL')]), ('Sub', [T0, V('SCREENYOFFSET')]),
+            ('IfLower', [I(2), T0, I(0)]), ('Equal', [T0, I(0)]), ('endif', []),
+            ('IfGreater', [I(4), T0, V('SCREENYSIZE')]), ('Equal', [T0, V('SCREENYSIZE')]), ('endif', []),
+            ('SetActivePalette', [('var', ('OBJECTVALUE1', 1, (0, 19))), I(0), T0]),
+            ('SetActivePalette', [I(7), T0, V('SCREENYSIZE')]), ('End', [])]
+
+
+def patch_water_palette(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, inc = nm.index('PS1WaterPalette'), nm.index('Inc')
+    bc = os.path.join(data, 'Scripts', 'ByteCode')
+    tmpl = water_palette()
+    done, already = [], []
+    for fn in sorted(os.listdir(bc)):
+        if not fn.startswith('RS'):
+            continue
+        path = os.path.join(bc, fn)
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        new = []
+        for at in range(len(code)):
+            if code[at] not in (inc, op):
+                continue
+            try:
+                ins = instructions(code, at, names, vars_)
+            except (IndexError, KeyError):
+                continue
+            ins = [(a, 'Inc' if (a == at and n == 'PS1WaterPalette') else n, o) for a, n, o in ins]
+            if not matches(ins, tmpl):
+                continue
+            if ins[1][0] - at != 4 or ins[-1][0] - at != 97:
+                sys.exit('ERROR patch_bytecode: %s @%d BGEffects draw with unexpected lengths' % (fn, at))
+            (already if code[at] == op else new).append(at if code[at] != op else '%s@%d' % (fn, at))
+        if new:
+            for at in new:
+                code[at] = op
+            open(path, 'wb').write(encode(code) + raw[p:])
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+            done += ['%s@%d' % (fn, at) for at in new]
+    return 'BGEffects draw native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
@@ -951,6 +1001,7 @@ def main():
     print('GS000.bin: ' + patch_hud_draw(data))
     print('GS000.bin: ' + patch_ring_touch(data))
     print('RS*.bin: ' + patch_water_draw(data))
+    print('RS*.bin: ' + patch_water_palette(data))
 
 
 if __name__ == '__main__':
