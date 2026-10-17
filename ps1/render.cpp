@@ -731,6 +731,7 @@ static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, boo
 volatile uint32_t g_ps1GpuClipped = 0; // primitives clipped to the screen because they were beyond the limits
 volatile uint32_t g_ps1GpuLimit   = 0; // primitives still beyond the limits (drawn as they are: GDB check)
 
+volatile uint32_t g_ps1FaceOffscreen = 0; // textured faces wholly off screen, not chained (docs/43 G6)
 volatile uint32_t g_ps1GpuLimitOnScreen = 0; // textured faces beyond the GPU limits whose box reaches the screen (G6)
 static bool PS1BeyondGpuLimits(int x0, int y0, int x1, int y1)
 {
@@ -2225,6 +2226,12 @@ void DrawTexturedFace(void *v, byte sheetID)
             g_ps1GpuLimit = g_ps1GpuLimit + 1;
             if (x1 >= 0 && x0 < SCREEN_XSIZE && y1 >= 0 && y0 < SCREEN_YSIZE) // docs/43 G6: does it reach the screen?
                 g_ps1GpuLimitOnScreen = g_ps1GpuLimitOnScreen + 1;
+        }
+        // docs/43 G6 / C6: a face wholly off the screen draws no pixel (the GPU clips to the drawing area; beyond the
+        // limits it drops it): no lookup, no primitive (the Title's ~15 a frame beyond the limits were all off screen)
+        if (x1 < 0 || x0 >= SCREEN_XSIZE || y1 < 0 || y0 >= SCREEN_YSIZE) {
+            g_ps1FaceOffscreen = g_ps1FaceOffscreen + 1;
+            return;
         }
     }
     const PS1AtlasCluster *c = PS1FindCluster(sheet, u0, v0);
