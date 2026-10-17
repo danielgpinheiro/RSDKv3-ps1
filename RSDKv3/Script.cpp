@@ -510,6 +510,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1AirBubble", 3),
     FunctionInfo("PS1HudDraw", 3),
     FunctionInfo("PS1RingTouch", 3),
+    FunctionInfo("PS1WaterDraw", 1),
 #endif
 };
 
@@ -948,6 +949,7 @@ enum ScrFunction {
     FUNC_PS1AIRBUBBLE,
     FUNC_PS1HUDDRAW,
     FUNC_PS1RINGTOUCH,
+    FUNC_PS1WATERDRAW,
 #endif
     FUNC_MAX_CNT
 };
@@ -2512,6 +2514,37 @@ volatile uint32_t g_ps1ScriptCalls = 0; // ProcessScript calls (SAMPLE builds)
 volatile uint32_t g_ps1ScriptOpdDirect = 0, g_ps1ScriptOpdVar = 0, g_ps1ScriptOpdConst = 0; // fetched operands (SAMPLE builds)
 volatile uint32_t g_ps1ScriptVarHist[VAR_MAX_CNT] = {}; // generic variable operands fetched, per variable (SAMPLE builds)
 #endif
+// DrawSpriteScreenFX's FX_INK case (the VM's opcode and the PS1WaterDraw native, docs/43 C2): frame `spriteFrame` of the
+// object's script at (x, y) with the entity's ink effect.
+static void PS1OpDrawSpriteInk(const ObjectScript *scriptInfo, const Entity *entity, const SpriteFrame *spriteFrame, int x, int y)
+{
+    switch (entity->inkEffect) {
+        case INK_NONE:
+            DrawSprite(x + spriteFrame->pivotX, y + spriteFrame->pivotY,
+                       spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, scriptInfo->spriteSheetID);
+            break;
+        case INK_BLEND:
+            DrawBlendedSprite(x + spriteFrame->pivotX, y + spriteFrame->pivotY,
+                              spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY,
+                              scriptInfo->spriteSheetID);
+            break;
+        case INK_ALPHA:
+            DrawAlphaBlendedSprite(x + spriteFrame->pivotX, y + spriteFrame->pivotY,
+                                   spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, entity->alpha,
+                                   scriptInfo->spriteSheetID);
+            break;
+        case INK_ADD:
+            DrawAdditiveBlendedSprite(x + spriteFrame->pivotX, y + spriteFrame->pivotY,
+                                      spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY,
+                                      entity->alpha, scriptInfo->spriteSheetID);
+            break;
+        case INK_SUB:
+            DrawSubtractiveBlendedSprite(x + spriteFrame->pivotX, y + spriteFrame->pivotY,
+                                         spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY,
+                                         entity->alpha, scriptInfo->spriteSheetID);
+            break;
+    }
+}
 // DrawNumbers' opcode body (the VM's case FUNC_DRAWNUMBERS and the PS1HudDraw native, docs/43 C2): draws
 // operands[3] with operands[4] digits from operands[1] leftwards; leaves the operand registers as the opcode does.
 static void PS1OpDrawNumbers(ObjectScript *scriptInfo)
@@ -3874,32 +3907,7 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                                            entity->rotation, entity->scale, scriptInfo->spriteSheetID);
                         break;
                     case FX_INK:
-                        switch (entity->inkEffect) {
-                            case INK_NONE:
-                                DrawSprite(scriptEng.operands[2] + spriteFrame->pivotX, scriptEng.operands[3] + spriteFrame->pivotY,
-                                           spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, scriptInfo->spriteSheetID);
-                                break;
-                            case INK_BLEND:
-                                DrawBlendedSprite(scriptEng.operands[2] + spriteFrame->pivotX, scriptEng.operands[3] + spriteFrame->pivotY,
-                                                  spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY,
-                                                  scriptInfo->spriteSheetID);
-                                break;
-                            case INK_ALPHA:
-                                DrawAlphaBlendedSprite(scriptEng.operands[2] + spriteFrame->pivotX, scriptEng.operands[3] + spriteFrame->pivotY,
-                                                       spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY, entity->alpha,
-                                                       scriptInfo->spriteSheetID);
-                                break;
-                            case INK_ADD:
-                                DrawAdditiveBlendedSprite(scriptEng.operands[2] + spriteFrame->pivotX, scriptEng.operands[3] + spriteFrame->pivotY,
-                                                          spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY,
-                                                          entity->alpha, scriptInfo->spriteSheetID);
-                                break;
-                            case INK_SUB:
-                                DrawSubtractiveBlendedSprite(scriptEng.operands[2] + spriteFrame->pivotX, scriptEng.operands[3] + spriteFrame->pivotY,
-                                                             spriteFrame->width, spriteFrame->height, spriteFrame->sprX, spriteFrame->sprY,
-                                                             entity->alpha, scriptInfo->spriteSheetID);
-                                break;
-                        }
+                        PS1OpDrawSpriteInk(scriptInfo, entity, spriteFrame, scriptEng.operands[2], scriptEng.operands[3]);
                         break;
                     case FX_TINT:
                         if (entity->inkEffect == INK_ALPHA) {
@@ -4872,6 +4880,43 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     break;
                 jumpTableStackPos += 3;
                 scriptCodePtr = B + 36; // Equal OBJECTTYPE, 10: the collect path in the VM
+                break;
+            }
+            case FUNC_PS1WATERDRAW: {
+                // Tidal Tempest's Water draw sub (the surface's four sprites, every frame: ~3.8 hblanks of VM in R41A,
+                // docs/43 C2). tools/scripts/patch_bytecode.py checks the whole sub (20 instructions, 149 words) and swaps
+                // only its first opcode (Inc OBJECTVALUE0) for this one. The same sub natively, statement by statement:
+                // the same draws in the same order, the jump stack slot, temp values and operand registers it leaves.
+                opcodeSize = 0;
+                int B      = scriptCodePtr - 4; // this instruction (Inc's layout: 1 + 3 words)
+                int *js    = &jumpTableStack[jumpTableStackPos];
+                int *v     = entity->values;
+                int *ops   = scriptEng.operands;
+                int *T     = scriptEng.tempValue;
+                ops[0] = ++v[0];                              // Inc OBJECTVALUE0
+                ops[0] = 0, ops[1] = v[0], ops[2] = 23, js[1] = 0; // IfGreater 0, OBJECTVALUE0, 23
+                if (v[0] > 23) {
+                    ops[0] = ops[1] = v[0] = 0;               // Equal OBJECTVALUE0, 0
+                    ops[0] = entity->frame + 1, entity->frame = (byte)ops[0]; // Inc OBJECTFRAME (the byte field wraps)
+                    ops[0] = entity->frame & 3, ops[1] = 3, entity->frame = (byte)ops[0]; // And OBJECTFRAME, 3
+                }
+                ops[0] = ops[1] = T[0] = xScrollOffset;                        // Equal TEMPVALUE0, SCREENXOFFSET
+                ops[1] = globalVariables[8], ops[0] = T[1] = Sin512(ops[1]);   // Sin TEMPVALUE1, GLOBAL[8]
+                ops[0] = T[1] = T[1] >> 5, ops[1] = 5;                         // ShR TEMPVALUE1, 5
+                ops[0] = T[0] = T[0] + T[1], ops[1] = T[1];                    // Add TEMPVALUE0, TEMPVALUE1
+                ops[0] = T[0] = T[0] & 63, ops[1] = 63;                        // And TEMPVALUE0, 63
+                ops[0] = T[0] = -T[0];                                         // FlipSign TEMPVALUE0
+                ops[0] = ops[1] = T[1] = waterLevel;                           // Equal TEMPVALUE1, STAGEWATERLEVEL
+                ops[0] = T[1] = T[1] - yScrollOffset, ops[1] = yScrollOffset;  // Sub TEMPVALUE1, SCREENYOFFSET
+                for (int k = 0; k < 4; ++k) {
+                    if (k) {
+                        ops[0] = T[0] = T[0] + 128, ops[1] = 128; // Add TEMPVALUE0, 128
+                    }
+                    ops[0] = entity->frame, ops[1] = FX_INK, ops[2] = T[0], ops[3] = T[1]; // DrawSpriteScreenFX OBJECTFRAME, 3, ...
+                    spriteFrame = &scriptFrames[scriptInfo->frameListOffset + ops[0]];
+                    PS1OpDrawSpriteInk(scriptInfo, entity, spriteFrame, T[0], T[1]);
+                }
+                scriptCodePtr = B + 148; // its End
                 break;
             }
             case FUNC_PS1UFOVIEW: {

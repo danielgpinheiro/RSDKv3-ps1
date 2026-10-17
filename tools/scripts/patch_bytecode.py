@@ -886,6 +886,56 @@ def patch_ring_touch(data):
     sys.exit('ERROR patch_bytecode: GS000 Ring playerInteraction not found')
 
 
+# Tidal Tempest's Water draw sub (RS020-RS029; docs/43 C2): only its first Inc opcode becomes PS1WaterDraw (RSDKv3/Script.cpp:
+# the same sub natively). The whole sub is checked (20 instructions, 149 words).
+def water_draw():
+    I = lambda v: ('int', v)
+    G = lambda i: ('var', ('GLOBAL', 1, (0, i)))
+    T0, T1 = V('TEMPVALUE0'), V('TEMPVALUE1')
+    D = ('DrawSpriteScreenFX', [V('OBJECTFRAME'), I(3), T0, T1])
+    return [('Inc', [V('OBJECTVALUE0')]), ('IfGreater', [I(0), V('OBJECTVALUE0'), I(23)]), ('Equal', [V('OBJECTVALUE0'), I(0)]),
+            ('Inc', [V('OBJECTFRAME')]), ('And', [V('OBJECTFRAME'), I(3)]), ('endif', []),
+            ('Equal', [T0, V('SCREENXOFFSET')]), ('Sin', [T1, G(8)]), ('ShR', [T1, I(5)]), ('Add', [T0, T1]),
+            ('And', [T0, I(63)]), ('FlipSign', [T0]), ('Equal', [T1, V('STAGEWATERLEVEL')]), ('Sub', [T1, V('SCREENYOFFSET')]),
+            D, ('Add', [T0, I(128)]), D, ('Add', [T0, I(128)]), D, ('Add', [T0, I(128)]), D, ('End', [])]
+
+
+def patch_water_draw(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, inc = nm.index('PS1WaterDraw'), nm.index('Inc')
+    bc = os.path.join(data, 'Scripts', 'ByteCode')
+    tmpl = water_draw()
+    done, already = [], []
+    for fn in sorted(os.listdir(bc)):
+        if not fn.startswith('RS'):
+            continue
+        path = os.path.join(bc, fn)
+        raw = open(path, 'rb').read()
+        code, p = bs.blocks(raw, 0)
+        new = []
+        for at in range(len(code)):
+            if code[at] not in (inc, op):
+                continue
+            try:
+                ins = instructions(code, at, names, vars_)
+            except (IndexError, KeyError):
+                continue
+            ins = [(a, 'Inc' if (a == at and n == 'PS1WaterDraw') else n, o) for a, n, o in ins]
+            if not matches(ins, tmpl):
+                continue
+            if ins[1][0] - at != 4 or ins[-1][0] - at != 148:
+                sys.exit('ERROR patch_bytecode: %s @%d Water draw with unexpected lengths' % (fn, at))
+            (already if code[at] == op else new).append(at if code[at] != op else '%s@%d' % (fn, at))
+        if new:
+            for at in new:
+                code[at] = op
+            open(path, 'wb').write(encode(code) + raw[p:])
+            assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+            done += ['%s@%d' % (fn, at) for at in new]
+    return 'Water draw native in %s%s' % (', '.join(done) or '-', ' (already: %s)' % ' '.join(already) if already else '')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
@@ -900,6 +950,7 @@ def main():
     print('RS*.bin: ' + patch_air_bubble(data))
     print('GS000.bin: ' + patch_hud_draw(data))
     print('GS000.bin: ' + patch_ring_touch(data))
+    print('RS*.bin: ' + patch_water_draw(data))
 
 
 if __name__ == '__main__':
