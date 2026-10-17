@@ -28,5 +28,26 @@ mkdir -p "$B/ps1" && cp ps1/video.hh "$B/ps1/"   # Script.cpp's PS1 profiling cl
 cp ps1/mdec.cpp ps1/mdec.hh "$DEST/sources/psxpress/"
 cp rsdkv3.ps-exe "$DEST/bin/SonicCD-PS1.exe"
 ( cd "$DEST/bin" && shasum -a 256 SonicCD-PS1.exe > SHA256SUMS )
+# bin/README.md from the executable just exported (size, SHA-256, port commit), as RSDKv4-ps1's exporter does
+SIZE=$(stat -f%z "$DEST/bin/SonicCD-PS1.exe" 2>/dev/null || stat -c%s "$DEST/bin/SonicCD-PS1.exe")
+SUM=$(cut -d' ' -f1 "$DEST/bin/SHA256SUMS")
+REV=$(git rev-parse --short HEAD); REVDATE=$(git log -1 --format=%ad --date=short HEAD)
+cat > "$DEST/bin/README.md" <<EOF_README
+# SonicCD-PS1.exe
+
+The PlayStation executable (PS-X EXE, $SIZE bytes) that \`build_iso.py\` puts on the disc as \`SONICCD.EXE\`:
+Retro Engine v3 (RSDKv3 decompilation) ported to the PS1 with psyqo.
+
+- Built from the RSDKv3-ps1 port at commit \`$REV\` ($REVDATE), natural boot (\`make\`), retail 2 MB RAM.
+- SHA-256 \`$SUM\` (also in \`SHA256SUMS\`).
+- One executable for both languages: it reads the disc's language (\`Data/Game/PS1Language.bin\`, written by
+  the builder's \`--lang\`).
+- It reads the converted assets from the disc (\`Data/...\`); the converters in \`../builder/\` must match this
+  executable's formats, so use the builder from the same release.
+- Real hardware (tested on a PSone, SCPH-101):
+  - The CPU drives the MDEC for the videos, because the MDEC's output DMA failed on that console.
+  - It guards against CD and DMA interrupts lost by psyqo's interrupt acknowledge.
+  - During a video, SELECT shows a diagnostics line at the bottom.
+EOF_README
 echo "exported $(git rev-parse --short HEAD) -> $DEST ($(find "$B" -type f | wc -l | tr -d ' ') builder files)"
 cat "$DEST/bin/SHA256SUMS"
