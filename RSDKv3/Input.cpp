@@ -18,7 +18,8 @@ int hapticEffectNum = -2;
 
 #if RETRO_PLATFORM == RETRO_PS1
 #include <psyqo/advancedpad.hh>
-extern psyqo::AdvancedPad *g_ps1Pad; // main.cpp (initialized in start())
+#include "../ps1/pad.hh"
+extern PS1Pad *g_ps1Pad; // main.cpp (initialized in start()); port 1 only (docs/43 C11)
 volatile uint16_t g_ps1PadTestMask  = 0; // GDB-injected input, bit = INPUT_* index (test harness)
 // Pad script (docs/28 speed pass 2): steps (frame << 8 | INPUT_* mask), set from GDB; from each step's frame
 // (g_ps1PerfFrames, engine frames since boot) g_ps1PadTestMask = its mask. Deterministic runs: tools/play/scene_run.sh.

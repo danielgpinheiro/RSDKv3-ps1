@@ -17,7 +17,8 @@
 #include <psyqo/gpu.hh>
 
 extern psyqo::GPU *g_ps1GPU;
-extern psyqo::AdvancedPad *g_ps1Pad;
+#include "pad.hh"
+extern PS1Pad *g_ps1Pad; // docs/43 C11
 
 void PS1RenderFmvFrame(int mode);           // ps1/render.cpp: 0 = black, 1 = new picture (bars only), 2 = repeat
 void PS1RenderFmvFade(int step);            // ps1/render.cpp: darken the whole frame by step / 255

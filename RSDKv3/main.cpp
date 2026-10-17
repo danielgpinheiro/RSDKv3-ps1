@@ -11,6 +11,7 @@
  * same fields the PC `stage=` argument sets) for the test harness.
  */
 #include <psyqo/advancedpad.hh>
+#include "../ps1/pad.hh"
 #include <psyqo/alloc.h>
 #include <psyqo/application.hh>
 #include <psyqo/cdrom-device.hh>
@@ -76,7 +77,7 @@ volatile uint32_t g_ps1TestStopCount = 0, g_ps1TestStopPos = 0;
 extern "C" __attribute__((noinline)) void ps1TestStop() { __asm__ volatile(""); }
 
 psyqo::GPU *g_ps1GPU            = nullptr;
-psyqo::AdvancedPad *g_ps1Pad    = nullptr;
+PS1Pad *g_ps1Pad    = nullptr;
 psyqo::CDRomDevice *g_ps1CDRom  = nullptr;
 
 void PS1RenderBeginFrame(psyqo::GPU &gpu); // ps1/render.cpp
@@ -166,7 +167,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         g_ps1CDRom = &m_cdrom;
         PS1SamplerInstall();
         PS1IrqGuardInstall(); // re-raises CD / DMA IRQ edges lost to psyqo's I_STAT read-modify-write (ps1/irq_guard.hh)
-        m_pad.initialize(psyqo::AdvancedPad::PollingMode::Fast); // never SimplePad (Nexus docs/26 F14)
+        m_pad.initialize(); // psyqo AdvancedPad's driver on port 1 only (ps1/pad.hh, docs/43 C11); never SimplePad (Nexus docs/26 F14)
         g_ps1Pad = &m_pad;
 #ifdef PS1_BOOT_FOLDER
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
@@ -216,7 +217,7 @@ class RSDKv3PS1App final : public psyqo::Application {
     }
 
     psyqo::CDRomDevice m_cdrom;
-    psyqo::AdvancedPad m_pad;
+    PS1Pad m_pad;
 };
 
 RSDKv3PS1App s_app;
