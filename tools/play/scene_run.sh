@@ -1,6 +1,6 @@
 #!/bin/bash
 # A scene's scripted run, timed (docs/28 speed pass 2): builds `make BOOT=SCENE [BOOT_ID=ID]` (SAMPLE=1 with SAMPLE=1),
-# boots it on the harness emulator (tools/redux_env.sh: redux16mb, stock 2 MB / 1 MB VRAM, muted), plays the pad
+# boots it on the harness emulator (tools/redux_env.sh: the stock PCSX-Redux app, 2 MB / 1 MB VRAM, muted), plays the pad
 # script and reports engine frames FROM..TO-1: CPU hblanks a frame (avg / worst; 262 = one 60 Hz frame) and vsyncs a
 # frame (avg / worst; 1.00 = 60 fps). Prints "RUN scene avgHbl maxHbl avgVbl maxVbl over frames" and guards.
 # Usage: tools/play/scene_run.sh OUT_PREFIX SCENE[:BOOT_ID] FROM TO

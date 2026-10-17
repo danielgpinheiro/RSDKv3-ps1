@@ -1,10 +1,11 @@
 # The PCSX-Redux instance the test harness drives (sourced by every emulator script, from the repo root).
-# User 2026-10-09: the patched copy ../pcsx-redux-16mb/redux16mb with the stock console only (2 MB RAM, 1 MB VRAM: never
-# -8mb / -16mb / -2mbvram), on its own portable settings (../pcsx-redux-cd/pcsx.json), GDB port 3338 and web port 8088,
-# so it runs next to other sessions' emulators (the shared install on 3333 is the Mania session's, the GTA III config
-# next to redux16mb uses 3334 / 8095) without touching them. Scripts kill only the PID they started (redux_stop).
+# User 2026-10-16: the stock PCSX-Redux app (/Applications/PCSX-Redux.app), not the patched 16 MB copy (that one is the
+# GTA III project's), with the stock console (-2mb: 2 MB RAM, 1 MB VRAM), on its own portable settings
+# (../pcsx-redux-cd/pcsx.json), GDB port 3338 and web port 8088, so it runs next to other sessions' emulators without
+# touching them (2026-10-09..16 it was ../pcsx-redux-16mb/redux16mb in stock mode: the same numbers within 0.05 %).
+# OpenBIOS from ../pcsx-redux-16mb/openbios.bin (a BIOS image only). Scripts kill only the PID they started (redux_stop).
 # REDUX_BIN / REDUX_PORT / REDUX_WEB / REDUX_PORTABLE override; REDUX_CARDS=0: the script passes its own cards.
-REDUX_BIN=${REDUX_BIN:-$(cd .. && pwd)/pcsx-redux-16mb/redux16mb}
+REDUX_BIN=${REDUX_BIN:-/Applications/PCSX-Redux.app/Contents/MacOS/PCSX-Redux}
 REDUX_PORTABLE=${REDUX_PORTABLE:-$(cd .. && pwd)/pcsx-redux-cd}
 REDUX_PORT=${REDUX_PORT:-3338}
 REDUX_WEB=${REDUX_WEB:-8088}
