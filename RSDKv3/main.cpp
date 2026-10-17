@@ -11,6 +11,7 @@
  * same fields the PC `stage=` argument sets) for the test harness.
  */
 #include <psyqo/advancedpad.hh>
+#include <psyqo/hardware/gpu.hh>
 #include "../ps1/pad.hh"
 #include <psyqo/alloc.h>
 #include <psyqo/application.hh>
@@ -56,6 +57,36 @@ volatile uint32_t g_ps1PerfGpuTail = 0, g_ps1PerfFlip = 0;
 volatile uint32_t g_ps1PerfWinTail = 0, g_ps1PerfWinMaxTail = 0, g_ps1PerfWinTailFrames = 0; // sum / worst / frames > 0
 volatile uint32_t g_ps1PerfWinFlip = 0, g_ps1PerfWinMaxFlip = 0;
 static uint32_t s_ps1FrameEnd = 0;
+// Framebuffer checksums for exact A/B checks where the harness can't read VRAM (DuckStation, docs/43 G3): with
+// g_ps1VramCrcOn set (GDB), each frame end hashes every line of the buffer the previous frame's chain drew (the picture
+// on screen; the GPU is idle after waitChainIdle) into g_ps1VramCrc[] by a GP0(C0h) VRAM read. Harness only (slow).
+int PS1ChainBufferY(); // ps1/gpu_chain.cpp
+volatile uint32_t g_ps1VramCrcOn = 0;
+volatile uint32_t g_ps1VramCrc[240];
+volatile uint32_t g_ps1VramLineY = 0xFFFF; // GDB: this line's 320 pixels also go to g_ps1VramLine
+volatile uint16_t g_ps1VramLine[320];
+static void PS1VramCrc()
+{
+    using namespace psyqo::Hardware;
+    const int y0 = PS1ChainBufferY() ? 0 : 256;
+    while (!(GPU::Ctrl & (1 << 26))) {} // ready for a command word
+    GPU::Data = 0x01000000;               // clear the texture cache
+    while (!(GPU::Ctrl & (1 << 26))) {}
+    GPU::Data = 0xC0000000;               // VRAM -> CPU
+    GPU::Data = (uint32_t)y0 << 16;
+    GPU::Data = (240u << 16) | 320u;
+    while (!(GPU::Ctrl & (1 << 27))) {}   // ready to send VRAM
+    for (int y = 0; y < 240; ++y) {
+        uint32_t h = 0;
+        for (int k = 0; k < 160; ++k) {
+            uint32_t px = (uint32_t)GPU::Data;
+            h = h * 31u + px;
+            if ((uint32_t)y == g_ps1VramLineY)
+                g_ps1VramLine[2 * k] = (uint16_t)px, g_ps1VramLine[2 * k + 1] = (uint16_t)(px >> 16);
+        }
+        g_ps1VramCrc[y] = h;
+    }
+}
 extern volatile uint32_t g_ps1ProfObjectsHbl, g_ps1ProfDrawHbl, g_ps1ProfObjDrawHbl, g_ps1ProfFloorsHbl, g_ps1ProfLayer[5];
 extern volatile uint32_t g_ps1Prof3DTransformHbl, g_ps1Prof3DSortHbl, g_ps1Prof3DDrawHbl;
 // objects, draw (all of DrawStageGFX), object draw subs, 3D floors, FG layers, per-line passes, tile bands, strip bands,
@@ -85,6 +116,7 @@ void PS1VideoTestService();                 // RSDKv3/Video.cpp (GDB test hook)
 void PS1SaveTestService();                  // RSDKv3/Userdata.cpp (GDB test hook)
 void PS1McPrepare();                        // ps1/memcard.cpp
 void PS1RenderEndFrame();
+void PS1DetectGpuVersion(); // ps1/render.cpp
 void PS1IrqGuardInstall();                  // ps1/irq_guard.cpp
 void PS1SamplerInstall();                   // ps1/pc_sampler.cpp (`make SAMPLE=1`; empty otherwise)
 
@@ -173,6 +205,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         StrCopy(Engine.startSceneFolder, g_ps1BootBuild);
         StrCopy(Engine.startSceneID, PS1_BOOT_ID);
 #endif
+        PS1DetectGpuVersion(); // flip-bit sprites for flipped tiles on the new GPU (ps1/render.cpp, docs/43 G3)
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         Engine.Init();
 #ifdef PS1_BOOT_FOLDER
@@ -209,6 +242,8 @@ class RSDKv3PS1App final : public psyqo::Application {
         uint32_t tw = PS1Hblanks();
         gpu().waitChainIdle(); // psyqo's flip waits for it too
         g_ps1PerfGpuTail = PS1HblanksSince(tw);
+        if (g_ps1VramCrcOn)
+            PS1VramCrc();
 #endif
         PS1PerfTick(gpu());
 #ifdef PS1_PERF_SPLIT
