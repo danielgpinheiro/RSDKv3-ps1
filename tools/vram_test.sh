@@ -31,6 +31,6 @@ redux_wait_free
 "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 4
-timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOADED|FRAME) .*"
+timeout ${TIMEOUT:-240} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOADED|FRAME) .*"
 redux_stop
 /usr/bin/python3 tools/check_vram.py "${OUT}_vram.bin" build/iso/Data "$STAGE" "${OUT}_pal.bin"

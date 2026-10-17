@@ -41,6 +41,6 @@ redux_wait_free
 "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 4
-timeout ${TIMEOUT:-400} /opt/homebrew/bin/gdb --batch -x $G 2>&1 | grep -E "^(REQ|OPEN|LOAD|DONE|STREAM|FS)" > "$OUT"
+timeout ${TIMEOUT:-400} ${GDB:-tools/gdbw} --batch -x $G 2>&1 | grep -E "^(REQ|OPEN|LOAD|DONE|STREAM|FS)" > "$OUT"
 redux_stop
 /usr/bin/python3 tools/load_profile.py "$OUT" build/game.bin "${EXTRA[@]}"

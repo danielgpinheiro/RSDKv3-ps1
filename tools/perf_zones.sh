@@ -33,7 +33,7 @@ GDBEOF
   "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
   sleep 4
-  timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "${OUT}_$ST.gdb" 2>&1 | grep -oE "ZONE .*" || echo "ZONE $ST (no result)"
+  timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "${OUT}_$ST.gdb" 2>&1 | grep -oE "ZONE .*" || echo "ZONE $ST (no result)"
   redux_stop
 done
 touch RSDKv3/main.cpp RSDKv3/RetroEngine.cpp

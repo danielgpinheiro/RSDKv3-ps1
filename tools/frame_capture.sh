@@ -33,5 +33,5 @@ redux_wait_free
 "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(FRAME|LAYERS|ACTIVE|SLOTS|MISS|FACES|FLOOR) .*"
+timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(FRAME|LAYERS|ACTIVE|SLOTS|MISS|FACES|FLOOR) .*"
 redux_stop

@@ -51,7 +51,7 @@ redux_wait_free
       -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$W/save.gdb" 2>&1 | grep -E "^(READ|WRITE)"
+timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "$W/save.gdb" 2>&1 | grep -E "^(READ|WRITE)"
 redux_stop
 echo "card 1 after the write:"; $MCD list "$W/mc1_saved.mcd"; $MCD check "$W/mc1_saved.mcd" BAHBRW-00003SONICCD
 echo "card 2 (blank, slot 2) untouched:"; $MCD list "$W/mc2.mcd" 2>&1 | head -2

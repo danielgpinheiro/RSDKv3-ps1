@@ -20,7 +20,7 @@ redux_wait_free
 "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 5
-timeout 1200 /opt/homebrew/bin/gdb --batch -x $OUT.gdb > $OUT.log 2>&1
+timeout 1200 ${GDB:-tools/gdbw} --batch -x $OUT.gdb > $OUT.log 2>&1
 redux_stop
 python3 - $OUT.log <<'PYEOF'
 import subprocess, collections, sys

@@ -46,5 +46,5 @@ redux_wait_free
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 4
-timeout ${TIMEOUT:-240} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|FRAME|STATE|PROF|GUARDS|CHAIN) .*|rror.*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-240} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|FRAME|STATE|PROF|GUARDS|CHAIN) .*|rror.*" | tee "$OUT.txt"
 redux_stop

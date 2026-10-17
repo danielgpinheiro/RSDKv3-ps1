@@ -51,7 +51,7 @@ redux_wait_free
       -stdout -logfile "$OUT.log" >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 4
-timeout ${TIMEOUT:-300} /opt/homebrew/bin/gdb --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|PROF|  ctrl|  prof) .*" | tee "$OUT.txt"
+timeout ${TIMEOUT:-300} ${GDB:-tools/gdbw} --batch -x "$OUT.gdb" 2>&1 | grep -oE "(LOAD|F[0-9]+|GUARDS|PROF|  ctrl|  prof) .*" | tee "$OUT.txt"
 redux_stop
 [ -f "${OUT}_ents.bin" ] && python3 - "${OUT}_ents.bin" <<'PYEOF'
 import sys, collections

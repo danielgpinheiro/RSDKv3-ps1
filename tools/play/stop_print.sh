@@ -28,6 +28,6 @@ redux_wait_free
 "$REDUX_BIN" $REDUX_ARGS -iso build/game.cue -exe rsdkv3.ps-exe >/dev/null 2>&1 &
 REDUX_PID=$!
 sleep 5
-timeout ${TIMEOUT:-900} /opt/homebrew/bin/gdb --batch -x "$G" > "$LOG" 2>&1
+timeout ${TIMEOUT:-900} ${GDB:-tools/gdbw} --batch -x "$G" > "$LOG" 2>&1
 redux_stop
 grep -E '^(\$[0-9]+ = |TYPES)' "$LOG"
