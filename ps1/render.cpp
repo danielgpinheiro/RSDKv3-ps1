@@ -411,10 +411,66 @@ static PS1ClusterCacheEntry s_clusterCache[PS1_CLUSTER_CACHE];
 static int16_t s_sheetLast[PS1_ATLAS_MAX_SHEETS][PS1_SHEET_MRU];
 static uint8_t s_sheetLastPos[PS1_ATLAS_MAX_SHEETS];
 static int8_t s_sheetDisjoint[PS1_ATLAS_MAX_SHEETS]; // -1 unknown, 0 overlapping clusters, 1 disjoint
+// Texel -> cluster candidate lists (docs/43 C6): the Title's clouds and water strips look up ~320 texels a frame on its
+// 512 x 512 sheet; the 256-entry cache above misses ~64 of them, and each miss scanned the sheet's 49 clusters (~40 hblanks
+// a frame). A sheet that keeps missing gets, per 16 x 16-texel cell, the list of clusters touching the cell in scan order
+// (heap, freed with the cache): the first of them holding the texel is exactly what the scan returns (the others can't
+// hold it), and none means the scan's miss.
+#define PS1_GRID_AFTER 64 // scans of one sheet before it gets lists
+#define PS1_GRID_CELLS 1024 // 32 x 32 cells of 16 texels: sheets up to 512 x 512
+struct PS1SheetGrid {
+    int16_t sheet;
+    uint16_t *start; // PS1_GRID_CELLS + 1 offsets into list
+    uint8_t *list;   // cluster index - firstCluster
+};
+static PS1SheetGrid s_grid = { -1, nullptr, nullptr };
+static uint8_t s_sheetScans[PS1_ATLAS_MAX_SHEETS];
+volatile uint32_t g_ps1ClusterGridHits = 0, g_ps1ClusterScans = 0, g_ps1ClusterGrids = 0, g_ps1ClusterGridBytes = 0; // GDB
+volatile uint8_t g_ps1ClusterGridOn = 1; // GDB: 0 = no lists (the same-build A/B)
+static void PS1FreeSheetGrid()
+{
+    if (s_grid.start)
+        psyqo_free(s_grid.start);
+    s_grid = PS1SheetGrid{ -1, nullptr, nullptr };
+}
+void PS1ReleaseClusterLists() { PS1FreeSheetGrid(); } // ps1/sprite_atlas.cpp: before a stage's atlas load (no heap hole)
+static void PS1BuildSheetGrid(int sheet)
+{
+    const PS1AtlasSheet &sh = g_ps1AtlasSheets[sheet];
+    if (sh.clusterCount > 256)
+        return;
+    PS1FreeSheetGrid();
+    auto touches = [&](int i, int c) {
+        const PS1AtlasCluster &cl = g_ps1AtlasClusters[sh.firstCluster + i];
+        int x0 = (c & 31) << 4, y0 = (c >> 5) << 4;
+        return !(cl.srcX >= x0 + 16 || cl.srcX + cl.w <= x0 || cl.srcY >= y0 + 16 || cl.srcY + cl.h <= y0);
+    };
+    int total = 0;
+    for (int c = 0; c < PS1_GRID_CELLS; ++c)
+        for (int i = 0; i < sh.clusterCount; ++i) total += touches(i, c);
+    int bytes = (PS1_GRID_CELLS + 1) * 2 + total;
+    uint16_t *mem = (uint16_t *)psyqo_malloc(bytes);
+    if (!mem)
+        return; // no room: the scan stays
+    uint8_t *list = (uint8_t *)(mem + PS1_GRID_CELLS + 1);
+    int n = 0;
+    for (int c = 0; c < PS1_GRID_CELLS; ++c) {
+        mem[c] = (uint16_t)n;
+        for (int i = 0; i < sh.clusterCount; ++i)
+            if (touches(i, c))
+                list[n++] = (uint8_t)i;
+    }
+    mem[PS1_GRID_CELLS] = (uint16_t)n;
+    s_grid = PS1SheetGrid{ (int16_t)sheet, mem, list };
+    g_ps1ClusterGrids = g_ps1ClusterGrids + 1;
+    g_ps1ClusterGridBytes = bytes;
+}
 static void PS1ClearFrameCache();
 static void PS1ClearClusterCache()
 {
     PS1ClearFrameCache();
+    memset(s_sheetScans, 0, sizeof(s_sheetScans));
+    PS1FreeSheetGrid();
     memset(s_clusterCache, 0xFF, sizeof(s_clusterCache));
     memset(s_sheetLast, 0xFF, sizeof(s_sheetLast));
     memset(s_sheetLastPos, 0, sizeof(s_sheetLastPos));
@@ -444,6 +500,19 @@ static const PS1AtlasCluster *PS1FindCluster(int sheet, int x, int y)
         const PS1AtlasCluster *c = &g_ps1AtlasClusters[e.index];
         return !c->picture || PS1AtlasPictureReady(c) ? c : nullptr;
     }
+    if (sheet == s_grid.sheet && ((unsigned)x | (unsigned)y) < 512u && g_ps1ClusterGridOn) {
+        unsigned c = ((unsigned)y >> 4 << 5) | ((unsigned)x >> 4);
+        const PS1AtlasCluster *base = &g_ps1AtlasClusters[g_ps1AtlasSheets[sheet].firstCluster];
+        for (int j = s_grid.start[c], end = s_grid.start[c + 1]; j < end; ++j) {
+            const PS1AtlasCluster &c2 = base[s_grid.list[j]];
+            if (x >= c2.srcX && x < c2.srcX + c2.w && y >= c2.srcY && y < c2.srcY + c2.h) {
+                g_ps1ClusterGridHits = g_ps1ClusterGridHits + 1;
+                e = PS1ClusterCacheEntry{ (int16_t)sheet, (int16_t)x, (int16_t)y, (int16_t)(&c2 - g_ps1AtlasClusters) };
+                return !c2.picture || PS1AtlasPictureReady(&c2) ? &c2 : nullptr;
+            }
+        }
+        // no cluster holds it: the scan's miss (below), which finds nothing either
+    }
     for (int m = 0; m < PS1_SHEET_MRU; ++m) {
         int last = s_sheetLast[sheet][m];
         if (last < 0)
@@ -455,6 +524,11 @@ static const PS1AtlasCluster *PS1FindCluster(int sheet, int x, int y)
         }
     }
     const PS1AtlasSheet &sh = g_ps1AtlasSheets[sheet];
+    g_ps1ClusterScans = g_ps1ClusterScans + 1;
+    if (sheet != s_grid.sheet && ++s_sheetScans[sheet] >= PS1_GRID_AFTER && g_ps1ClusterGridOn) {
+        s_sheetScans[sheet] = 0;
+        PS1BuildSheetGrid(sheet);
+    }
     for (int i = sh.firstCluster; i < sh.firstCluster + sh.clusterCount; ++i) {
         const PS1AtlasCluster &c = g_ps1AtlasClusters[i];
         if (x >= c.srcX && x < c.srcX + c.w && y >= c.srcY && y < c.srcY + c.h) {
