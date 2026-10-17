@@ -832,6 +832,60 @@ def patch_hud_draw(data):
     sys.exit('ERROR patch_bytecode: GS000 HUD draw not found')
 
 
+# The Ring's playerInteraction sub (GS000, every act; docs/43 C2): only its first IfNotEqual opcode becomes PS1RingTouch
+# (RSDKv3/Script.cpp: the sub's head natively, the collect path left to the VM). The whole sub is checked.
+def ring_touch():
+    I = lambda v: ('int', v)
+    G = lambda i: ('var', ('GLOBAL', 1, (0, i)))
+    return [('IfNotEqual', [I(0), V('PLAYERSTATE'), I(24)]), ('IfEqual', [I(2), V('PLAYERCOLLISIONPLANE'), V('OBJECTPROPERTYVALUE')]),
+            ('PlayerObjectCollision', [I(0), I(-8), I(-8), I(8), I(8)]), ('IfEqual', [I(4), V('CHECKRESULT'), I(1)]),
+            ('Equal', [V('OBJECTTYPE'), I(10)]), ('Inc', [V('PLAYERVALUE0')]), ('IfGreater', [I(6), V('PLAYERVALUE0'), I(999)]),
+            ('Equal', [V('PLAYERVALUE0'), I(999)]), ('endif', []),
+            ('IfGreaterOrEqual', [I(8), V('PLAYERVALUE0'), G(18)]), ('IfNotEqual', [I(10), G(0), I(2)]), ('Inc', [G(11)]),
+            ('IfEqual', [I(12), V('STAGEPLAYERLISTPOS'), I(0)]), ('PlaySfx', [I(20), I(0)]), ('else', []),
+            ('PlaySfx', [I(21), I(0)]), ('endif', []), ('endif', []), ('Add', [G(18), I(100)]),
+            ('IfGreater', [I(14), G(18), I(300)]), ('Equal', [G(18), I(1000)]), ('endif', []),
+            ('IfGreaterOrEqual', [I(16), V('PLAYERVALUE0'), I(200)]), ('IfEqual', [I(18), V('STAGEPLAYERLISTPOS'), I(0)]),
+            ('IfEqual', [I(20), V('STAGEDEBUGMODE'), I(0)]), ('SetAchievement', [I(4), I(100)]), ('endif', []), ('endif', []),
+            ('endif', []), ('endif', []),
+            ('IfEqual', [I(22), G(19), I(0)]), ('SetSfxAttributes', [I(1), I(-1), I(-100)]), ('Equal', [G(19), I(1)]),
+            ('else', []), ('SetSfxAttributes', [I(2), I(-1), I(100)]), ('Equal', [G(19), I(0)]), ('endif', []),
+            ('endif', []), ('endif', []), ('endif', []), ('End', [])]
+
+
+def patch_ring_touch(data):
+    names, vars_ = bs.tables()
+    nm = [n for n, _ in names]
+    op, ifne = nm.index('PS1RingTouch'), nm.index('IfNotEqual')
+    path = os.path.join(data, 'Scripts', 'ByteCode', 'GS000.bin')
+    raw = open(path, 'rb').read()
+    code, p = bs.blocks(raw, 0)
+    jtab, p2 = bs.blocks(raw, p)
+    count, = struct.unpack_from('<H', raw, p2)
+    subs = [struct.unpack_from('<4i', raw, p2 + 2 + 16 * i) for i in range(count)]
+    tmpl = ring_touch()
+    for o in range(count):
+        at = subs[o][1]  # the playerInteraction sub
+        if not 0 <= at < len(code) or code[at] not in (ifne, op):
+            continue
+        try:
+            ins = instructions(code, at, names, vars_)
+        except (IndexError, KeyError):
+            continue
+        ins = [(a, 'IfNotEqual' if (a == at and n == 'PS1RingTouch') else n, o2) for a, n, o2 in ins]
+        if not matches(ins, tmpl):
+            continue
+        if ins[1][0] - at != 8 or ins[4][0] - at != 36 or ins[-1][0] - at != 214:
+            sys.exit('ERROR patch_bytecode: GS000 Ring playerInteraction with unexpected lengths')
+        if code[at] == op:
+            return 'Ring touch native in - (already: GS000 object %d)' % o
+        code[at] = op
+        open(path, 'wb').write(encode(code) + raw[p:])
+        assert bs.blocks(open(path, 'rb').read(), 0)[0] == code
+        return 'Ring touch native in GS000 object %d @%d' % (o, at)
+    sys.exit('ERROR patch_bytecode: GS000 Ring playerInteraction not found')
+
+
 def main():
     data = sys.argv[1]
     print('PS001.bin: ' + patch_options(data))
@@ -845,6 +899,7 @@ def main():
     print('PS000.bin: ' + patch_title_water(data))
     print('RS*.bin: ' + patch_air_bubble(data))
     print('GS000.bin: ' + patch_hud_draw(data))
+    print('GS000.bin: ' + patch_ring_touch(data))
 
 
 if __name__ == '__main__':

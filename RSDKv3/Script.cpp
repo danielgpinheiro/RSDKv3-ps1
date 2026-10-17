@@ -509,6 +509,7 @@ const FunctionInfo functions[] = {
     FunctionInfo("PS1TitleWater", 3),
     FunctionInfo("PS1AirBubble", 3),
     FunctionInfo("PS1HudDraw", 3),
+    FunctionInfo("PS1RingTouch", 3),
 #endif
 };
 
@@ -946,6 +947,7 @@ enum ScrFunction {
     FUNC_PS1TITLEWATER,
     FUNC_PS1AIRBUBBLE,
     FUNC_PS1HUDDRAW,
+    FUNC_PS1RINGTOUCH,
 #endif
     FUNC_MAX_CNT
 };
@@ -4841,6 +4843,35 @@ void ProcessScript(int scriptCodeStart, int jumpTableStart, byte scriptSub)
                     }
                 }
                 scriptCodePtr = B + 523; // its End
+                break;
+            }
+            case FUNC_PS1RINGTOUCH: {
+                // The Ring's playerInteraction sub (GS000; every ring near the player, every frame: ~8 hblanks of VM in
+                // R41A, docs/43 C2). tools/scripts/patch_bytecode.py checks the whole sub (40 instructions, 215 words) and
+                // swaps only its first opcode (IfNotEqual 0, PLAYERSTATE, 24) for this one. Its head natively -- the state /
+                // plane tests and the touch box -- then, when the ring is collected, the VM goes on at the collect path
+                // (Equal OBJECTTYPE, 10) with the three ifs pushed; otherwise straight to the End, as after its endifs.
+                // Same jump-stack slots and operand registers as the VM.
+                opcodeSize = 0;
+                int B      = scriptCodePtr - 8; // this instruction (IfNotEqual's layout: 1 + 2 + 3 + 2 words)
+                int *js    = &jumpTableStack[jumpTableStackPos];
+                int *ops   = scriptEng.operands;
+                js[1]      = 0; // ops: (0, PLAYERSTATE, 24), decoded with the opcode
+                scriptCodePtr = B + 214; // its End
+                if (ops[1] == 24)
+                    break;
+                ops[0] = 2, ops[1] = playerList[activePlayer].collisionPlane, ops[2] = entity->propertyValue, js[2] = 2;
+                if (ops[1] != ops[2])
+                    break;
+                ops[0] = 0, ops[1] = -8, ops[2] = -8, ops[3] = 8, ops[4] = 8; // PlayerObjectCollision C_TOUCH, -8, -8, 8, 8
+                ops[5] = entity->XPos >> 16;
+                ops[6] = entity->YPos >> 16;
+                TouchCollision(ops[5] - 8, ops[6] - 8, ops[5] + 8, ops[6] + 8);
+                ops[0] = 4, ops[1] = scriptEng.checkResult, ops[2] = 1, js[3] = 4;
+                if (ops[1] != 1)
+                    break;
+                jumpTableStackPos += 3;
+                scriptCodePtr = B + 36; // Equal OBJECTTYPE, 10: the collect path in the VM
                 break;
             }
             case FUNC_PS1UFOVIEW: {
