@@ -85,6 +85,13 @@ rebuild the natural EXE first.
   plain `target remote localhost:N` line (the one line `gdbw` rewrites). Start PCSX-Redux **without `-run`** when GDB
   sets breakpoints before the first `continue`. Evidence rules: `../docs/21`.
 
+## docs/43 fix pass (2026-10-16/17)
+Results per issue: `docs/perf-43-report.md` (log: `docs/perf-43-tracker.md`; hardware facts: `docs/ps1-perf-findings.md`).
+New in RSDKv3-ps1: `ps1/pad.cpp` (port 1 only), natives `PS1HudDraw` / `PS1RingTouch` (GS000), per-cell cluster lists
+and the off-screen textured-face cull (Title), flip-bit tile sprites after a boot self-test (`PS1DetectGpuVersion`;
+GDB `g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`). Harness (PERF_SPLIT builds): `g_ps1VramCrcOn` hashes the displayed
+buffer per line (GP0(C0h)) for DuckStation checks, `g_ps1VramLineY` dumps one line.
+
 ## Layout
 | Path | Role |
 |---|---|
