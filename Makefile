@@ -49,6 +49,7 @@ ps1/loading.cpp \
 ps1/sprite_atlas.cpp \
 ps1/tileset.cpp \
 ps1/render.cpp \
+ps1/stack.cpp \
 
 ifeq ($(PLATFORM_TEST),1)
 SRCS := ps1/platform_test.cpp $(filter-out RSDKv3/%,$(SRCS))
@@ -57,6 +58,8 @@ endif
 # ps1/libc comes FIRST: its C/C++ shim headers (<string>, <cmath>, <stdio.h>, ...) shadow any
 # system headers the freestanding toolchain might otherwise surface.
 CPPFLAGS = -I ps1/libc -I RSDKv3 -DRETRO_USE_MOD_LOADER=0
+# The main stack is a .bss array (ps1/stack.hh, CD-092): the test mode's stack checkpoint measures it there.
+CPPFLAGS += -DPS1_SEPARATE_STACK=1
 
 # `make BOOT=<stage folder>` (e.g. R11A): start in that stage (test harness): its first GameConfig
 # entry unless BOOT_ID is given (acts 2/3 have ids 2/3), started like the Stage Select does (Options.GameMode = BOOT_GAMEMODE, default
