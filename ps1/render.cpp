@@ -743,11 +743,10 @@ static void PS1ChainPieceRectClipped(const PS1Piece &p, int x, int y, int w, int
     int cy0 = y < 0 ? 0 : y, cy1 = y + h > SCREEN_YSIZE ? SCREEN_YSIZE : y + h;
     if (cx0 >= cx1 || cy0 >= cy1)
         return;
-    int u0 = PS1ClipEdge(p.u, p.w, cx0 - x, w, flipX), u1 = PS1ClipEdge(p.u, p.w, cx1 - x, w, flipX);
-    int v0 = PS1ClipEdge(p.v, p.h, cy0 - y, h, flipY), v1 = PS1ClipEdge(p.v, p.h, cy1 - y, h, flipY);
+    PS1QuadUV uv  = PS1ClipRectUV(p.u, p.v, p.w, p.h, x, y, w, h, cx0, cx1, cy0, cy1, flipX, flipY); // ps1/sprite_quad.hh
     int16_t xs[4] = { (int16_t)cx0, (int16_t)cx1, (int16_t)cx0, (int16_t)cx1 };
     int16_t ys[4] = { (int16_t)cy0, (int16_t)cy0, (int16_t)cy1, (int16_t)cy1 };
-    PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
+    PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
 }
 
 // A convex polygon (screen coordinates, any size) cut to the screen (Sutherland-Hodgman) and chained as
@@ -1967,7 +1966,7 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         rotation = 0x200 - rotation;
     int sn = sin512LookupTable[rotation] * scale >> 9;
     int cs = cos512LookupTable[rotation] * scale >> 9;
-    bool fx = direction != FLIP_NONE;
+    bool fx = direction == FLIP_X; // upstream (software path) mirrors only for FLIP_X (CD-093)
     const bool right = scale == 0x200 && !(rotation & 0x7F);
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
         PS1QuadCorners q = PS1AffineCorners(XPos, YPos, pivotX, pivotY, sn, cs, fx, p.ox, p.oy, p.w, p.h); // ps1/sprite_quad.hh
@@ -1980,15 +1979,26 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
         }
         if (PS1SpriteOffScreen(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) // (the tester report above: no wrapped quad)
             return;
-        PS1QuadUV uv = PS1AffineUV(q, p.u, p.v, p.w, p.h, right);
+        PS1QuadUV uv = PS1AffineUV(q, p.u, p.v, p.w, p.h, right); // texel edges (CD-016)
+        // Rotozoom pieces beyond the GPU limits (wider than 1023 / taller than 511 px) would be dropped or wrapped by the GPU.
+        // Sonic CD's paths never produce one (every scene_run guard and the cd-sprite-quads scenarios: g_ps1GpuLimit 0), so
+        // RSDKv4's screen cut (PS1ChainPieceQuadClipped, ~2 KB) is not ported; the counter makes a first case fail a test.
+        if (PS1BeyondGpuLimits(x0, y0, x1, y1))
+            g_ps1GpuLimit = g_ps1GpuLimit + 1;
         PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
     });
 }
 
+// GDB knobs for checking rotated sprites (CD-016 / CD-093, ../tests): g_ps1RotForce >= 0 draws every rotated sprite at
+// that rotation (0-511) and direction g_ps1RotForceDir; -1 = off (the game's own values).
+volatile int32_t g_ps1RotForce = -1, g_ps1RotForceDir = 0;
+
 void DrawSpriteRotated(int direction, int XPos, int YPos, int pivotX, int pivotY, int sprX, int sprY, int width, int height, int rotation,
                        int sheetID)
 {
-    if (!(rotation & 0x1FF) && direction == FLIP_NONE) { // no rotation: 1:1 sprite (pixel exact)
+    if (g_ps1RotForce >= 0)
+        rotation = g_ps1RotForce, direction = g_ps1RotForceDir;
+    if (!(rotation & 0x1FF) && direction != FLIP_X) { // no rotation, not mirrored (upstream mirrors only FLIP_X): 1:1 sprite
         DrawSprite(XPos - pivotX, YPos - pivotY, width, height, sprX, sprY, sheetID); // callers pass -frame pivot
         return;
     }

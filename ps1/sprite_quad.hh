@@ -15,43 +15,63 @@ struct PS1QuadUV {
 };
 
 // Corners of a piece (local rect ox, oy, w, h of the frame) rotated / zoomed about (pivotX, pivotY) and placed at
-// (XPos, YPos); sn / cs = sin / cos * scale (512 = 1.0), fx = mirrored. Upstream (HW path) corners.
+// (XPos, YPos); sn / cs = sin / cos * scale (512 = 1.0), fx = mirrored. A, B, C are upstream's (HW path) corners; D is
+// B + C - A, so the quad is an exact parallelogram (CD-093): the GPU's two triangles then share one texture gradient.
+// With D rounded on its own (as before), ABC and BCD had different gradients and the texture sheared along the BC
+// diagonal, a shear that changed with every angle and position (the "varying UVs" of rotated sprites).
 static inline PS1QuadCorners PS1AffineCorners(int XPos, int YPos, int pivotX, int pivotY, int sn, int cs, bool fx, int ox, int oy,
                                               int w, int h)
 {
     PS1QuadCorners q;
-    const int lx[4] = { ox, ox + w, ox, ox + w };
-    const int ly[4] = { oy, oy, oy + h, oy + h };
-    for (int k = 0; k < 4; ++k) {
+    const int lx[3] = { ox, ox + w, ox };
+    const int ly[3] = { oy, oy, oy + h };
+    for (int k = 0; k < 3; ++k) {
         int x  = fx ? pivotX - lx[k] : lx[k] - pivotX;
         int y  = ly[k] - pivotY;
         q.x[k] = XPos + ((x * cs + y * sn) >> 9);
         q.y[k] = YPos + ((y * cs - x * sn) >> 9);
     }
+    q.x[3] = q.x[1] + q.x[2] - q.x[0];
+    q.y[3] = q.y[1] + q.y[2] - q.y[0];
     return q;
 }
 
 // UV edges of a rotated / zoomed piece (texture at u, v, size w x h) for the corners q; rightAngle = the rotation is a
-// multiple of 90 degrees at scale 1.
+// multiple of 90 degrees at scale 1 (CD-016, as RSDKv4-ps1 0a3f95f did for Sonic 2). The GPU takes each pixel's texel
+// at its top-left point and leaves out the right / bottom edges, so a texture axis running left or up on screen read
+// its far edge u + w / v + h: the next piece in the atlas (the white L along a sprite turned ~180 degrees, the column
+// beside a mirrored one). At right angles the quad is axis-aligned and exact when such an axis has both edges pulled
+// back one texel (as the 1:1 mirror); other angles and scales can't be exact with integer UVs, so the far edges come one
+// texel in and no pixel reads a neighbouring piece.
 static inline PS1QuadUV PS1AffineUV(const PS1QuadCorners &q, int u, int v, int w, int h, bool rightAngle)
 {
-    (void)q, (void)rightAngle;
-    return PS1QuadUV{ u, u + w, v, v + h };
+    PS1QuadUV uv = { u, u + w, v, v + h };
+    if (rightAngle) { // u runs from corner A to B, v from A to C
+        int ux = q.x[1] - q.x[0], uy = q.y[1] - q.y[0], vx = q.x[2] - q.x[0], vy = q.y[2] - q.y[0];
+        if (ux < 0 || (ux == 0 && uy < 0))
+            --uv.u0, --uv.u1;
+        if (vx < 0 || (vx == 0 && vy < 0))
+            --uv.v0, --uv.v1;
+    }
+    else
+        --uv.u1, --uv.v1;
+    return uv;
 }
 
-// UV edges of an axis-aligned piece (texture pu, pv, size pw x ph) drawn at w x h screen pixels, optionally mirrored:
-// 1:1 mirrors sample texel u + w - 1 - k at column k (UV edges u + w - 1 .. u - 1), scaled ones the full [u, u + w) range.
+// UV edges of an axis-aligned piece (texture pu, pv, size pw x ph) drawn at w x h screen pixels, optionally mirrored.
+// A mirrored axis must not start at its far edge (pu + pw: the next piece, CD-016): 1:1 mirrors sample texel
+// u + w - 1 - k at column k (UV edges u + w - 1 .. u - 1, exact); scaled mirrors take u + w - 1 .. u (one texel narrower:
+// a scaled edge has no exact integer UV); unmirrored pieces the full [u, u + w) range.
 static inline PS1QuadUV PS1RectUV(int pu, int pv, int pw, int ph, int w, int h, bool flipX, bool flipY)
 {
-    bool unit    = w == pw && h == ph;
     PS1QuadUV uv = { pu, pu + pw, pv, pv + ph };
     if (flipX) {
-        uv.u0 = unit ? pu + pw - 1 : pu + pw;
-        uv.u1 = unit ? pu - 1 : pu;
+        uv.u0 = pu + pw - 1;
+        uv.u1 = w == pw ? pu - 1 : pu;
     }
     if (flipY) {
-        uv.v0 = unit ? pv + ph - 1 : pv + ph;
-        uv.v1 = unit ? pv - 1 : pv;
+        uv.v0 = pv + ph - 1;
+        uv.v1 = h == ph ? pv - 1 : pv;
     }
     return uv;
 }
@@ -62,4 +82,19 @@ static inline int PS1ClipEdge(int base, int texels, int pos, int len, bool flip)
 {
     int t = (int)((long long)pos * texels / len);
     return flip ? base + texels - t : base + t;
+}
+
+#define PS1_SPRITE_QUAD_CLIPUV 1 // (the host test checks PS1ClipRectUV when present)
+// UV edges of a piece at screen rect (x, y, w, h) cut to [cx0, cx1) x [cy0, cy1) (PS1ChainPieceRectClipped: a zoomed piece
+// beyond the GPU limits); a mirrored axis never starts at its far edge (PS1RectUV).
+static inline PS1QuadUV PS1ClipRectUV(int pu, int pv, int pw, int ph, int x, int y, int w, int h, int cx0, int cx1, int cy0, int cy1,
+                                      bool flipX, bool flipY)
+{
+    PS1QuadUV uv = { PS1ClipEdge(pu, pw, cx0 - x, w, flipX), PS1ClipEdge(pu, pw, cx1 - x, w, flipX), PS1ClipEdge(pv, ph, cy0 - y, h, flipY),
+                     PS1ClipEdge(pv, ph, cy1 - y, h, flipY) };
+    if (flipX && uv.u0 > pu + pw - 1)
+        uv.u0 = pu + pw - 1;
+    if (flipY && uv.v0 > pv + ph - 1)
+        uv.v0 = pv + ph - 1;
+    return uv;
 }
