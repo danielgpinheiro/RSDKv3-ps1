@@ -161,3 +161,12 @@ dist:
 	cd build/dist && shasum -a 256 SonicCD-PS1-$$lang.bin SonicCD-PS1-$$lang.cue > SHA256SUMS-$$lang && cat SHA256SUMS-$$lang
 
 .PHONY: disc dist
+
+# Regression suite (../docs/44 ledger, ../docs/45 design, ../tests/README.md): `make test` = this port's quick tier (run it
+# before every commit), `make test-full` = every scenario on both emulators, perf and memory gates (after engine,
+# interpreter, renderer or perf changes). The suite builds in its own shadow copy (../.rt-<port>), never here.
+.PHONY: test test-full
+test:
+	/usr/bin/python3 ../tests/run.py --port cd
+test-full:
+	/usr/bin/python3 ../tests/run.py --tier full --port cd
