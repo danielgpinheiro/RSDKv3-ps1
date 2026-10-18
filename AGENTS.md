@@ -12,9 +12,9 @@ RSDKv3-Decompilation (Retro Engine v3, Sonic CD 2011) ported to the PS1 with **p
 github.com/danielgpinheiro/RSDKv3-ps1 (public on GitHub as of 2026-10-16; push here).
 
 **Status (2026-10-16): done.** All 12 phases; the game and its videos run on a PSone (SCPH-101, `../docs/31`).
-Public builder https://github.com/danielgpinheiro/Sonic-CD-PS1-ISO-Builder (head `436e2a0`, executable from `8c8ac56`,
-update notes in its `CHANGELOG.md`). The disc boots `SONICCD.EXE` (`4d45fc0`). Since then only fixes, tools and
-harness changes.
+Public builder https://github.com/danielgpinheiro/Sonic-CD-PS1-ISO-Builder (head `ebd3a05`, executable from `99e1063`,
+the docs/43 fix pass; update notes in its `CHANGELOG.md`). The disc boots `SONICCD.EXE` (`4d45fc0`). Since then only
+fixes, tools and harness changes.
 
 ## First checks (every session)
 - `git status` / `git log --oneline -10` (uncommitted work may be another agent's).
