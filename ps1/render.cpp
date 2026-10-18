@@ -14,6 +14,7 @@
 // Phase 3.2 scope (docs/28): chain + clear + palette, atlas sprites (plain / flipped / scaled / rotated
 // / rotozoom), HScroll tile layers. Not yet (counted in g_ps1DrawTodo): ink effects and tint (3.3),
 // per-line palette banks + water palette (3.4), VScroll / 3D layers / faces (3.5, 7), menu text (4).
+#include "sprite_quad.hh"
 #include "RetroEngine.hpp"
 
 #include <stdio.h>
@@ -708,19 +709,10 @@ static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, boo
         PS1ChainPieceSprite(p, x, y);
         return;
     }
-    bool unit = w == p.w && h == p.h;
-    int u0 = p.u, u1 = p.u + p.w, v0 = p.v, v1 = p.v + p.h;
-    if (flipX) {
-        u0 = unit ? p.u + p.w - 1 : p.u + p.w;
-        u1 = unit ? p.u - 1 : p.u;
-    }
-    if (flipY) {
-        v0 = unit ? p.v + p.h - 1 : p.v + p.h;
-        v1 = unit ? p.v - 1 : p.v;
-    }
+    PS1QuadUV uv  = PS1RectUV(p.u, p.v, p.w, p.h, w, h, flipX, flipY); // ps1/sprite_quad.hh
     int16_t xs[4] = { (int16_t)x, (int16_t)(x + w), (int16_t)x, (int16_t)(x + w) };
     int16_t ys[4] = { (int16_t)y, (int16_t)y, (int16_t)(y + h), (int16_t)(y + h) };
-    PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
+    PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
 }
 
 // GPU limits (psx-spx GPU "Vertex"): coordinates are 11-bit signed (-1024..1023, beyond that they wrap)
@@ -751,12 +743,8 @@ static void PS1ChainPieceRectClipped(const PS1Piece &p, int x, int y, int w, int
     int cy0 = y < 0 ? 0 : y, cy1 = y + h > SCREEN_YSIZE ? SCREEN_YSIZE : y + h;
     if (cx0 >= cx1 || cy0 >= cy1)
         return;
-    auto edge = [](int base, int texels, int pos, int len, bool flip) {
-        int t = (int)((int64_t)pos * texels / len);
-        return flip ? base + texels - t : base + t;
-    };
-    int u0 = edge(p.u, p.w, cx0 - x, w, flipX), u1 = edge(p.u, p.w, cx1 - x, w, flipX);
-    int v0 = edge(p.v, p.h, cy0 - y, h, flipY), v1 = edge(p.v, p.h, cy1 - y, h, flipY);
+    int u0 = PS1ClipEdge(p.u, p.w, cx0 - x, w, flipX), u1 = PS1ClipEdge(p.u, p.w, cx1 - x, w, flipX);
+    int v0 = PS1ClipEdge(p.v, p.h, cy0 - y, h, flipY), v1 = PS1ClipEdge(p.v, p.h, cy1 - y, h, flipY);
     int16_t xs[4] = { (int16_t)cx0, (int16_t)cx1, (int16_t)cx0, (int16_t)cx1 };
     int16_t ys[4] = { (int16_t)cy0, (int16_t)cy0, (int16_t)cy1, (int16_t)cy1 };
     PS1ChainPieceQuad(p, xs, ys, u0, u1, v0, v1);
@@ -1980,21 +1968,20 @@ static void PS1DrawSpriteAffine(int direction, int XPos, int YPos, int pivotX, i
     int sn = sin512LookupTable[rotation] * scale >> 9;
     int cs = cos512LookupTable[rotation] * scale >> 9;
     bool fx = direction != FLIP_NONE;
+    const bool right = scale == 0x200 && !(rotation & 0x7F);
     PS1ForEachPiece(sheetID, width, height, sprX, sprY, [&](const PS1Piece &p) {
+        PS1QuadCorners q = PS1AffineCorners(XPos, YPos, pivotX, pivotY, sn, cs, fx, p.ox, p.oy, p.w, p.h); // ps1/sprite_quad.hh
         int16_t xs[4], ys[4];
-        const int lx[4] = { p.ox, p.ox + p.w, p.ox, p.ox + p.w };
-        const int ly[4] = { p.oy, p.oy, p.oy + p.h, p.oy + p.h };
         int x0 = 0x7FFF, x1 = -0x8000, y0 = 0x7FFF, y1 = -0x8000;
         for (int k = 0; k < 4; ++k) {
-            int x = fx ? pivotX - lx[k] : lx[k] - pivotX;
-            int y = ly[k] - pivotY;
-            int sx = XPos + ((x * cs + y * sn) >> 9), sy = YPos + ((y * cs - x * sn) >> 9);
+            int sx = q.x[k], sy = q.y[k];
             xs[k] = (int16_t)sx, ys[k] = (int16_t)sy;
             x0 = sx < x0 ? sx : x0, x1 = sx > x1 ? sx : x1, y0 = sy < y0 ? sy : y0, y1 = sy > y1 ? sy : y1;
         }
         if (PS1SpriteOffScreen(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) // (the tester report above: no wrapped quad)
             return;
-        PS1ChainPieceQuad(p, xs, ys, p.u, p.u + p.w, p.v, p.v + p.h);
+        PS1QuadUV uv = PS1AffineUV(q, p.u, p.v, p.w, p.h, right);
+        PS1ChainPieceQuad(p, xs, ys, uv.u0, uv.u1, uv.v0, uv.v1);
     });
 }
 
