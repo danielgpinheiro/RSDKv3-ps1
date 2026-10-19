@@ -21,6 +21,7 @@
 #include "../ps1/loading.hh"
 #include "../ps1/stack.hh"
 #include "../ps1/test_mode.hh"
+#include "../ps1/version_stamp.hh"
 #include "../ps1/video.hh"
 
 extern "C" char __heap_start, __stack_start;
@@ -217,6 +218,7 @@ class RSDKv3PS1App final : public psyqo::Application {
         }
 #endif
         PS1DetectGpuVersion(); // flip-bit sprites for flipped tiles on the new GPU (ps1/render.cpp, docs/43 G3)
+        PS1VersionLoad();      // VERSION.TXT (build stamp for the title screen, ps1/version_stamp.hh): next to the index
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         Engine.Init();
 #ifdef PS1_BOOT_FOLDER

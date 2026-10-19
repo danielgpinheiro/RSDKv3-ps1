@@ -15,6 +15,7 @@
 // / rotozoom), HScroll tile layers. Not yet (counted in g_ps1DrawTodo): ink effects and tint (3.3),
 // per-line palette banks + water palette (3.4), VScroll / 3D layers / faces (3.5, 7), menu text (4).
 #include "sprite_quad.hh"
+#include "version_stamp.hh"
 #include "RetroEngine.hpp"
 
 #include <stdio.h>
@@ -865,6 +866,24 @@ static void PS1DrawBankRegions(psyqo::Color clear)
     g_ps1BankMask    = mask;
 }
 
+// Build stamp (ps1/version_stamp.hh): bottom-left of the title screen only, 8 px from the edges, after everything
+// else (on top), with a dark shadow, faded with the screen. The texture goes back into VRAM when the title comes again.
+static void PS1DrawVersionStamp()
+{
+    static int s_list = -1, s_pos = -1;
+    static bool s_title = false;
+    if (activeStageList != s_list || stageListPosition != s_pos) { // a stage change: is it the title?
+        s_list      = activeStageList;
+        s_pos       = stageListPosition;
+        bool title  = s_list == STAGELIST_PRESENTATION && StrComp(stageList[s_list][s_pos].folder, "Title");
+        if (title && !s_title && g_ps1VersionDraws)
+            PS1VersionUpload();
+        s_title = title;
+    }
+    if (s_title)
+        PS1VersionDraw(8, SCREEN_YSIZE - 8 - PS1_VERSION_TEXT_H, s_fadeR, s_fadeG, s_fadeB, s_fadePending ? s_fadeA : 0);
+}
+
 // PC converts the palette here, after drawing: the CLUT rows chained at the frame start get the
 // palette as it is now (a SetFade / palette change from a draw sub shows in the same frame).
 void FlipScreen()
@@ -896,6 +915,7 @@ void FlipScreen()
         if (s_clearPrim) // cleared (undrawn) pixels are black: under the fade, fade colour * a
             s_clearPrim->setColor(clear);
     }
+    PS1DrawVersionStamp();
 }
 
 void GenerateBlendLookupTable() {}

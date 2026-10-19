@@ -17,7 +17,7 @@ fi
 B=$DEST/builder
 rm -rf "$B"
 mkdir -p "$B/tools" "$B/RSDKv3" "$DEST/bin" "$DEST/sources/psxpress"
-for f in build_assets.py extract_rsdk.py bytecode_scan.py bytecode_dis.py; do cp tools/$f "$B/tools/"; done
+for f in build_assets.py extract_rsdk.py bytecode_scan.py bytecode_dis.py gen_version.py; do cp tools/$f "$B/tools/"; done
 for d in scripts font atlas tiles bgstrips floor audio fmv disc; do
   mkdir -p "$B/tools/$d"
   cp tools/$d/*.py "$B/tools/$d/"
@@ -31,6 +31,8 @@ mkdir -p "$B/ps1" && cp ps1/video.hh "$B/ps1/"   # Script.cpp's PS1 profiling cl
 cp ps1/mdec.cpp ps1/mdec.hh "$DEST/sources/psxpress/"
 cp rsdkv3.ps-exe "$DEST/bin/SonicCD-PS1.exe"
 ( cd "$DEST/bin" && shasum -a 256 SonicCD-PS1.exe > SHA256SUMS )
+# bin/VERSION.TXT: this port's commit, put on the builder's discs (build_disc.py) and shown on the title screen
+VERSION=$(/usr/bin/python3 tools/gen_version.py "$DEST/bin/VERSION.TXT" .)
 # bin/README.md from the executable just exported (size, SHA-256, port commit), as RSDKv4-ps1's exporter does
 SIZE=$(stat -f%z "$DEST/bin/SonicCD-PS1.exe" 2>/dev/null || stat -c%s "$DEST/bin/SonicCD-PS1.exe")
 SUM=$(cut -d' ' -f1 "$DEST/bin/SHA256SUMS")
@@ -43,6 +45,7 @@ Retro Engine v3 (RSDKv3 decompilation) ported to the PS1 with psyqo.
 
 - Built from the RSDKv3-ps1 port at commit \`$REV\` ($REVDATE), natural boot (\`make\`), retail 2 MB RAM.
 - SHA-256 \`$SUM\` (also in \`SHA256SUMS\`).
+- \`VERSION.TXT\` (\`$VERSION\`) goes on the disc; the title screen shows it bottom-left.
 - One executable for both languages: it reads the disc's language (\`Data/Game/PS1Language.bin\`, written by
   the builder's \`--lang\`).
 - It reads the converted assets from the disc (\`Data/...\`); the converters in \`../builder/\` must match this
@@ -52,5 +55,5 @@ Retro Engine v3 (RSDKv3 decompilation) ported to the PS1 with psyqo.
   - It guards against CD and DMA interrupts lost by psyqo's interrupt acknowledge.
   - During a video, SELECT shows a diagnostics line at the bottom.
 EOF_README
-echo "exported $(git rev-parse --short HEAD) -> $DEST ($(find "$B" -type f | wc -l | tr -d ' ') builder files)"
+echo "exported $(git rev-parse --short HEAD) (version $VERSION) -> $DEST ($(find "$B" -type f | wc -l | tr -d ' ') builder files)"
 cat "$DEST/bin/SHA256SUMS"

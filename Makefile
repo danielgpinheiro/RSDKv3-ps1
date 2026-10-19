@@ -49,6 +49,7 @@ ps1/loading.cpp \
 ps1/sprite_atlas.cpp \
 ps1/tileset.cpp \
 ps1/render.cpp \
+ps1/version_stamp.cpp \
 ps1/stack.cpp \
 
 ifeq ($(PLATFORM_TEST),1)

@@ -304,3 +304,6 @@ rsdkv3.elf
 rsdkv3.map
 build/
 __pycache__/
+
+# Build stamp written by tools/gen_version.py (build_disc.py writes its own under build/)
+/VERSION.TXT

@@ -41,6 +41,8 @@ JP_VIDEOS= tools/data_disc.sh   # without the JP vocals (the public builder's im
 make dist                       # natural build only: licensed (../LICENSE.DAT by path; LICENSE=none for none), verified,
                                 # build/dist/SonicCD-PS1-<EN|JP>.bin/.cue + SHA256SUMS; SYSTEM.CNF boots SONICCD.EXE
 tools/export_builder.sh ../Sonic-CD-PS1-ISO-Builder   # natural build: EXE, SHA256SUMS, bin/README.md, converters
+# Build stamp: every disc gets VERSION.TXT (tools/gen_version.py: commit, -dirty; the builder: bin/VERSION.TXT from the
+# export), drawn bottom-left on the title (ps1/version_stamp.*). PS1_VERSION_FILE=path / none: that file / no file
 tools/smoke_disc.sh             # phase 0 test disc (subset of SonicCD_Extracted) + make disc
 tools/smoke_test.sh [OUT]       # phase 0 smoke test over GDB (files CRC, SPU, icon, pad, fps); make PLATFORM_TEST=1
 tools/frame_capture.sh N OUT    # VRAM + framebuffer PNGs at frame N + renderer profile (MASK/FROM/GDBSET)
