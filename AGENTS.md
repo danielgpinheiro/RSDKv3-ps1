@@ -90,9 +90,10 @@ rebuild the natural EXE first.
 ## docs/43 fix pass (2026-10-16/17)
 Results per issue: `docs/perf-43-report.md` (log: `docs/perf-43-tracker.md`; hardware facts: `docs/ps1-perf-findings.md`).
 New in RSDKv3-ps1: `ps1/pad.cpp` (port 1 only), natives `PS1HudDraw` / `PS1RingTouch` (GS000), per-cell cluster lists
-and the off-screen textured-face cull (Title), flip-bit tile sprites after a boot self-test (`PS1DetectGpuVersion`;
-GDB `g_ps1FlipRectsOn` / `g_ps1FlipRectsForce`). Harness (PERF_SPLIT builds): `g_ps1VramCrcOn` hashes the displayed
-buffer per line (GP0(C0h)) for DuckStation checks, `g_ps1VramLineY` dumps one line.
+and the off-screen textured-face cull (Title), flip-bit tile sprites after a boot self-test (`PS1DetectGpu`; since
+2026-10-19 also 1:1 flipped sprite pieces: "GPU type and flip rectangles" below; GDB `g_ps1FlipRectsOn` /
+`g_ps1FlipRectsForce`). Harness (PERF_SPLIT builds): `g_ps1VramCrcOn` hashes the displayed buffer per line (GP0(C0h))
+for DuckStation checks, `g_ps1VramLineY` dumps one line.
 
 ## Layout
 | Path | Role |
@@ -126,3 +127,15 @@ Builds cleanly · fits 2 MB · verified in the emulator with evidence (GDB count
 byte/pixel comparisons, measured numbers) · `../docs/28` status updated · commit only when the user
 asks (prefixes `feature:` `fix:` `chore:` `housekeeping:` `FMV:`, push `fork ps1`; no Claude / AI attribution, no
 `Co-Authored-By` line, here or in the builder).
+
+## GPU type and flip rectangles (2026-10-19, ledger CD-094)
+`PS1DetectGpu` (`ps1/render.cpp`, `start()` before anything is drawn) runs psx-spx's GPU detection (GP1(10h) index 4 then
+7; else GP0(E1h) bit 12 -> GPUSTAT bit 12 after E6h = 0): type 0 (the old 160-pin GPU; PCSX-Redux and the stock
+DuckStation answer so) never uses GP0(E1h) flip bits; types 1 / 2 run the 2x1 readback, and flip rectangles are used
+only when it comes back mirrored (`g_ps1GpuType`, `g_ps1GpuQuery7`, `g_ps1FlipTest`; GDB `g_ps1FlipRectsOn` /
+`g_ps1FlipRectsForce`). Flipped tiles and 1:1 unrotated flipped sprite pieces (`PS1ChainPieceRect`, upright mirrored
+affine pieces) are then rectangles under a flipped texpage when `PS1FlipRectTex` (`ps1/sprite_quad.hh`) allows it (X flip:
+u + w even; unflipped X: u even; the quad it replaces exact), else quads; counters `g_ps1TileFlipRects`,
+`g_ps1SpriteFlipRects`, `g_ps1SpriteFlipQuads`. Tests: `*-gpu-detect` (type 0 on both stock emulators) and `*-flip-ab-*`
+on the DuckStation preview (`../tests` emulator `dsp`: every picture identical to the quad path), host
+`test_*_sprite_quads` flip-rect-exact. The code costs one 2 KB heap step (the EXE is padded to 2 KB).

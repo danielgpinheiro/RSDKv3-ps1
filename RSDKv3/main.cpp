@@ -119,7 +119,8 @@ void PS1VideoTestService();                 // RSDKv3/Video.cpp (GDB test hook)
 void PS1SaveTestService();                  // RSDKv3/Userdata.cpp (GDB test hook)
 void PS1McPrepare();                        // ps1/memcard.cpp
 void PS1RenderEndFrame();
-void PS1DetectGpuVersion(); // ps1/render.cpp
+void PS1DetectGpu(); // ps1/render.cpp
+extern volatile uint32_t g_ps1GpuType, g_ps1GpuQuery7, g_ps1FlipTest;
 void PS1IrqGuardInstall();                  // ps1/irq_guard.cpp
 void PS1SamplerInstall();                   // ps1/pc_sampler.cpp (`make SAMPLE=1`; empty otherwise)
 
@@ -217,7 +218,10 @@ class RSDKv3PS1App final : public psyqo::Application {
             StrCopy(Engine.startSceneID, PS1TestBootId());
         }
 #endif
-        PS1DetectGpuVersion(); // flip-bit sprites for flipped tiles on the new GPU (ps1/render.cpp, docs/43 G3)
+        PS1DetectGpu();    // flip-bit rectangles for flipped tiles and sprites if the GPU draws them (ps1/render.cpp, docs/43 G3)
+#if PS1_TEST
+        PS1TestNote("gpu", g_ps1GpuType, g_ps1GpuQuery7, g_ps1FlipTest); // "gpu type q7 readback" (0 = not tested)
+#endif
         PS1VersionLoad();      // VERSION.TXT (build stamp for the title screen, ps1/version_stamp.hh): next to the index
         PS1LoadingBegin(); // boot load: GameConfig, global scripts, first stage
         Engine.Init();
