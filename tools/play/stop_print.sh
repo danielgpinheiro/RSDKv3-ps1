@@ -1,5 +1,5 @@
 #!/bin/bash
-# Values at a frame of a scene's scripted run (docs/28 speed pass 2: e.g. branch counters of a native opcode, to see
+# Values at a frame of a scene's scripted run (docs/ports/sonic-cd/28 speed pass 2: e.g. branch counters of a native opcode, to see
 # that the A/B run went through every path; breakpoints inside ProcessScript don't stop here). A BOOT=SCENE build of the
 # working tree, the survey's pad script, then GDB prints each EXPR at the end of frame F.
 # Usage: tools/play/stop_print.sh SCENE F OUT.log EXPR...

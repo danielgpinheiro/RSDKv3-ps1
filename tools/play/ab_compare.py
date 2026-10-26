@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A/B exactness check of two scene_run.sh runs with the same CHECK frames (docs/28 speed pass 2).
+"""A/B exactness check of two scene_run.sh runs with the same CHECK frames (docs/ports/sonic-cd/28 speed pass 2).
 Usage: ab_compare.py OUT_A OUT_B FRAME...
 Logic: OUT_state_F.bin (entities, players, script engine, globals) byte-identical.
 Pictures: both framebuffers of OUT_F_vram.bin (320 x 240 at y 0 and y 256) pixel-identical.

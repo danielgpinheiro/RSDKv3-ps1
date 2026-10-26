@@ -1,5 +1,5 @@
 #!/bin/bash
-# A/B of one scene (docs/28 speed pass 2): the reference build (REF commit, default the speed pass 2 kit, built
+# A/B of one scene (docs/ports/sonic-cd/28 speed pass 2): the reference build (REF commit, default the speed pass 2 kit, built
 # in the git worktree build/refwt; cached per scene in build/perf2/ref/) against the working tree, the same pad
 # script (tools/play/survey.sh pad_for) and frames: both timings, then logic state + framebuffers compared at CHECK.
 # The reference runs boot the reference data's disc (REF_DISC, default build/perf2/refdisc/game.cue: build/game.* as

@@ -15,7 +15,7 @@
 #include <psyqo/primitives/misc.hh>
 
 // Arena per frame parity. A frame's arena is being DMA'd while the next frame builds in the other one.
-// Sonic CD (docs/28 3.6): 64 KB each, on the heap, time-shared with the CD read-ahead windows (user
+// Sonic CD (docs/ports/sonic-cd/28 3.6): 64 KB each, on the heap, time-shared with the CD read-ahead windows (user
 // decision 2026-09-24): released at the start of a load (PS1ChainSuspend), allocated again at its end.
 #define PS1_CHAIN_ARENA_WORDS (64 * 1024 / 4) // Tidal Tempest underwater frames (flipped-tile quads + region replay) reach ~12.3K words
 // Every chained fragment is kept <= 14 words (psyqo GPU::c_chainThreshold / 4). psyqo links
@@ -359,7 +359,7 @@ void PS1ChainTPage(psyqo::PrimPieces::TPageAttr attr) {
 
 void PS1ChainInvalidateTPage() { s_tpageValid = false; }
 
-// docs/43 G3: when the last texpage chained has flip bits (render.cpp's flipped tiles), chain the same page without them.
+// docs/perf/43 G3: when the last texpage chained has flip bits (render.cpp's flipped tiles), chain the same page without them.
 void PS1ChainTPageNoFlip() {
     if (!s_cur || !s_tpageValid || !(s_lastTPage & 0x3000))
         return;

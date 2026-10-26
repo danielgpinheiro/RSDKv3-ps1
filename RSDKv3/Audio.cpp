@@ -53,7 +53,7 @@ SDL_AudioStream *ogv_stream;
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-// SFX on the SPU (docs/28 phase 5.1; the RSDKv2 port's scheme). Samples are build-time .vag files
+// SFX on the SPU (docs/ports/sonic-cd/28 phase 5.1; the RSDKv2 port's scheme). Samples are build-time .vag files
 // (tools/audio/build_sfx.py: one rate per file) uploaded to SPU RAM by a bump allocator: global sfx
 // first (kept), stage sfx after them (reset by ReleaseStageSfx). RSDK channel c plays on SPU voice
 // s_ps1SfxVoice[c] (voices 1 and 3 have SPU capture buffers: evidence).

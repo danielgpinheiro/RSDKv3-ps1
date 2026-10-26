@@ -18,7 +18,7 @@
 
 extern psyqo::GPU *g_ps1GPU;
 #include "pad.hh"
-extern PS1Pad *g_ps1Pad; // docs/43 C11
+extern PS1Pad *g_ps1Pad; // docs/perf/43 C11
 
 void PS1RenderFmvFrame(int mode);           // ps1/render.cpp: 0 = black, 1 = new picture (bars only), 2 = repeat
 void PS1RenderFmvFade(int step);            // ps1/render.cpp: darken the whole frame by step / 255
@@ -44,7 +44,7 @@ volatile uint32_t g_ps1FmvOverlayForce = 0; // GDB test hook: 1 = diagnostics st
 #define FMV_Y           32  // 176 lines letterboxed in 240
 #define FMV_FADE_STEP   8   // as upstream ProcessVideo: fadeMode += 8 per frame after a skip
 // Length watchdog: a video never plays longer than its frames at 15 fps (4 vblanks each at 60 Hz) plus
-// 5 s, whatever the stream does: the game always gets back control (the PSone FMV hang, docs/28).
+// 5 s, whatever the stream does: the game always gets back control (the PSone FMV hang, docs/ports/sonic-cd/28).
 #define FMV_VBLANKS_PER_FRAME 4
 #define FMV_SLACK_VBLANKS     300
 
@@ -255,7 +255,7 @@ void PS1FmvBeginFrame() {
             s_openVbl     = g_ps1GPU->getFrameCount();
             s_limitVbl    = (uint32_t)PS1VideoFrameCount() * FMV_VBLANKS_PER_FRAME + FMV_SLACK_VBLANKS;
             takeBase();
-            // Hardware test without a debugger (docs/28 appendix 12): R1 held as the video opens = hybrid
+            // Hardware test without a debugger (docs/ports/sonic-cd/28 appendix 12): R1 held as the video opens = hybrid
             // MDEC (DMA0 in, CPU out), L1 = DMA in and out, neither = automatic (PIO, falling back on faults).
             using Pad = psyqo::AdvancedPad;
             bool r1 = g_ps1Pad && g_ps1Pad->isButtonPressed(Pad::Pad::Pad1a, Pad::Button::R1);

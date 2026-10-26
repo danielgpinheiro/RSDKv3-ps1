@@ -284,7 +284,7 @@ void RetroEngine::Init()
     InitUserdata();
 #if RETRO_PLATFORM == RETRO_PS1
     Engine.onlineActive = false; // no online services on a PS1 (the scripts check it: menu buttons, achievements)
-    { // One disc per language (docs/28 phase 4): the disc says which (tools/build_assets.py --lang).
+    { // One disc per language (docs/ports/sonic-cd/28 phase 4): the disc says which (tools/build_assets.py --lang).
         FileInfo info;
         if (LoadFile("Data/Game/PS1Language.bin", &info)) {
             byte lang = RETRO_EN;
@@ -1459,7 +1459,7 @@ void RetroEngine::Callback(int callbackID)
                 }
             }*/
 #if RETRO_PLATFORM == RETRO_PS1
-            // Help & Options > HOW TO PLAY (docs/28 phase 4): the Help stage, as the PC original (the code above).
+            // Help & Options > HOW TO PLAY (docs/ports/sonic-cd/28 phase 4): the Help stage, as the PC original (the code above).
             for (int s = 0; s < stageListCount[STAGELIST_PRESENTATION]; ++s) {
                 if (StrComp("HELP", stageList[STAGELIST_PRESENTATION][s].name)) {
                     activeStageList   = STAGELIST_PRESENTATION;
@@ -1472,7 +1472,7 @@ void RetroEngine::Callback(int callbackID)
             break;
         case CALLBACK_PRIVACY_SELECTED: // PC = Controls, Mobile = Full Game Only Screen
             // PS1: CONTROLS / SETTINGS (CALLBACK_SETTINGS_SELECTED) open native PC dialogs; no PS1 screen yet
-            // (docs/28 phase 4, open item): the options menu stays as it is.
+            // (docs/ports/sonic-cd/28 phase 4, open item): the options menu stays as it is.
             PrintLog("Callback: PC = Controls Menu, Mobile = Privacy Screen");
             break;
         case CALLBACK_TRIAL_ENDED:

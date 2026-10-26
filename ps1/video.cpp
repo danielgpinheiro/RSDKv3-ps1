@@ -1,7 +1,7 @@
 /*
  * PS1 STR video playback (MDEC + VLC).
  *
- * Sonic CD (docs/28 phase 6): full-screen FMV STRs from tools/fmv/build_str.py (320x176, 7-8 video
+ * Sonic CD (docs/ports/sonic-cd/28 phase 6): full-screen FMV STRs from tools/fmv/build_str.py (320x176, 7-8 video
  * sectors per frame, JP + US XA audio channels), described by an 'STR2' sidecar that also sizes the
  * buffers (max RLE words, max sectors per frame). In direct mode the MDEC output goes column by column
  * (16 x height) straight into VRAM: no full-frame buffer in RAM.
@@ -55,7 +55,7 @@ uint32_t PS1HblanksSince(uint32_t t0) { return (PS1Hblanks() - t0) & 0xffff; }
 
 static FILE *s_str = nullptr;
 
-// All FMV buffers live on the heap only while a video is open (docs/26 B1): ~235 KB that
+// All FMV buffers live on the heap only while a video is open (docs/history/26 B1): ~235 KB that
 // the game doesn't carry after the intro. Allocated largest-first to limit fragmentation.
 static uint16_t   *s_video    = nullptr; // decoded 15bpp BGR555 frame (80 KB); direct mode: one 16-px column
 static uint8_t    *s_ring     = nullptr; // CD read-ahead ring (40 KB)
@@ -268,7 +268,7 @@ static int fetchFrame() {
 volatile uint32_t g_ps1VideoSyncFail = 0, g_ps1VideoColMdecHbl = 0, g_ps1VideoColUpHbl = 0; // (debug: direct mode)
 volatile uint32_t g_ps1VideoCdDeferred = 0; // CD IRQs held back until an MDEC-out DMA finished
 
-// ---- MDEC modes (docs/28 appendix 12, part 2) ---------------------------------------------------
+// ---- MDEC modes (docs/ports/sonic-cd/28 appendix 12, part 2) ---------------------------------------------------
 // On the PSone every MDEC-out DMA timed out (SF = 20 per picture) with the CPU starved behind it, which
 // no emulator shows. So the MDEC runs without DMA by default (PIO: the CPU writes the RLE words and
 // reads the pixels, as ps1-tests' hardware-tested primitives), with the DMA path as the fallback
@@ -610,7 +610,7 @@ void PS1VideoRequestFrame() {
 // Measured in the intro: game logic + chain building ~55-75 hblanks per frame, so the
 // video's share of a game frame (upload + decode, counted from PS1UpdateVideoTexture's
 // start) stops starting new slices after 170 and never lets MDEC run past 190 (262 = one
-// frame; heaviest measured intro frame at these values: see docs/20).
+// frame; heaviest measured intro frame at these values: see docs/ports/nexus/20).
 #define VLC_CHUNK_WORDS 512 // ~11-25 hblanks each
 #define WORK_BUDGET_HBL 170
 #define MDEC_LIMIT_HBL  190

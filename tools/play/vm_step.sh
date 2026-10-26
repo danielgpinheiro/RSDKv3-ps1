@@ -1,5 +1,5 @@
 #!/bin/bash
-# Machine instructions per VM instruction (docs/28 speed pass 2): a SAMPLE=1 BOOT=SCENE build stopped at engine frame
+# Machine instructions per VM instruction (docs/ports/sonic-cd/28 speed pass 2): a SAMPLE=1 BOOT=SCENE build stopped at engine frame
 # FRAME (the survey's pad script), then N single steps from the next ProcessScript call; prints the steps each VM
 # instruction took and the source lines they ran. Usage: tools/play/vm_step.sh SCENE [FRAME=600] [N=900]
 set -u

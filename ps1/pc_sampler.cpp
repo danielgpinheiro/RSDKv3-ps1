@@ -1,5 +1,5 @@
 /*
- * PC sampler (`make SAMPLE=1`, docs/28 speed pass 2; after RSDKv5-ps1's, docs/32 3.3e), on the stock 2 MB console.
+ * PC sampler (`make SAMPLE=1`, docs/ports/sonic-cd/28 speed pass 2; after RSDKv5-ps1's, docs/ports/mania/32 3.3e), on the stock 2 MB console.
  * Root counter 0 counts the system clock and raises its IRQ every PS1_SAMPLE_PERIOD cycles (psx-spx "Timers": mode
  * bit 3 reset at target, bit 4 IRQ at target, bit 6 repeat; source 0 = system clock). The first handler of the BIOS
  * IRQ chain acknowledges it and, while g_ps1SampleOn is set, appends one sample to a 4 KB ring: the interrupted

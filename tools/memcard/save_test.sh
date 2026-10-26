@@ -1,5 +1,5 @@
 #!/bin/bash
-# Save test (docs/28 phase 8) on temporary card images: never the player's cards. PCSX-Redux stores
+# Save test (docs/ports/sonic-cd/28 phase 8) on temporary card images: never the player's cards. PCSX-Redux stores
 # -memcard1/-memcard2 in ~/.config/pcsx-redux/pcsx.json, so it is backed up and restored on exit.
 # Steps (GDB, default build, Title): first read (fresh formatted card: no save) -> write saveRAM with two
 # marker values -> snapshot of card 1 (tools/memcard/mcd.py: the file is listed) -> RAM scrambled -> re-read

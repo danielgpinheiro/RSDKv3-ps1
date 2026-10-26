@@ -53,7 +53,7 @@ make BOOT=R11A && tools/logic_test.sh   # start in a stage; drive the player via
 tools/load_profile.sh OUT.log [STOP]    # CD requests / files per load (a BOOT= build)
 tools/memcard/save_test.sh [WORKDIR]    # save / reload on temporary card images
 tools/scene3d/sort3d_check.sh   # host: PS1 3D draw-list sort == upstream order
-# Speed pass 2 kit (docs/28 appendix "speed pass 2") and the docs/43 study:
+# Speed pass 2 kit (docs/ports/sonic-cd/28 appendix "speed pass 2") and the docs/perf/43 study:
 tools/play/scene_run.sh OUT SCENE[:ID] FROM TO   # one scripted run: CPU hblanks / vsyncs (avg, worst); PAD=, SAMPLE=1,
         # CHECK="f.." (state + VRAM dumps), POKE= (forced paths), PERF_SPLIT=1 (SPLIT line: GPU tail, flip gap, sections),
         # GPU="f.." (chain priced by tools/play/gpu_cost.py), KEEP_RAM=1 (keep those RAM dumps), EMU=ds, NOBUILD=1
@@ -87,8 +87,8 @@ rebuild the natural EXE first.
   plain `target remote localhost:N` line (the one line `gdbw` rewrites). Start PCSX-Redux **without `-run`** when GDB
   sets breakpoints before the first `continue`. Evidence rules: `../docs/21`.
 
-## docs/43 fix pass (2026-10-16/17)
-Results per issue: `docs/perf-43-report.md` (log: `docs/perf-43-tracker.md`; hardware facts: `docs/ps1-perf-findings.md`).
+## docs/perf/43 fix pass (2026-10-16/17)
+Results per issue: `docs/perf/perf-43-report.md` (log: `docs/perf/perf-43-tracker.md`; hardware facts: `docs/perf/ps1-perf-findings.md`).
 New in RSDKv3-ps1: `ps1/pad.cpp` (port 1 only), natives `PS1HudDraw` / `PS1RingTouch` (GS000), per-cell cluster lists
 and the off-screen textured-face cull (Title), flip-bit tile sprites after a boot self-test (`PS1DetectGpu`; since
 2026-10-19 also 1:1 flipped sprite pieces: "GPU type and flip rectangles" below; GDB `g_ps1FlipRectsOn` /
@@ -106,7 +106,7 @@ for DuckStation checks, `g_ps1VramLineY` dumps one line.
 | `tools/smoke_*.sh`, `vramshot.py`, `pad.lua` | phase 0 harness, VRAM dumps, pad input via the web server |
 | `tools/build_assets.py`, `tools/tiles/`, `tools/bgstrips/`, `tools/atlas/`, `tools/floor/`, `tools/rsdkmanifest/` | build-time asset pipeline (per-player atlases + strips; the public builder runs the same) |
 | `tools/scripts/patch_bytecode.py` | build-time bytecode edits: options window, native opcodes, `patch_unlocks` |
-| `tools/play/` | speed-pass and docs/43 harness (above) |
+| `tools/play/` | speed-pass and docs/perf/43 harness (above) |
 | `tools/redux_env.sh`, `tools/ds_env.sh`, `tools/gdbw`, `tools/gdbrelay.py` | emulator instances and the GDB 18 relay |
 | `ps1/render.cpp` | the PS1 renderer (replaces `RSDKv3/Drawing.cpp`; upstream side effects ported explicitly) |
 

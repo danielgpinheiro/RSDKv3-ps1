@@ -1,5 +1,5 @@
 #!/bin/bash
-# Which engine calls a frame makes, and when (docs/28 speed pass 2): a BOOT=SCENE build (the working tree's current
+# Which engine calls a frame makes, and when (docs/ports/sonic-cd/28 speed pass 2): a BOOT=SCENE build (the working tree's current
 # EXE: build it first), the survey's pad script, stopped at the end of frame F - 1; then breakpoints on FUNCS print the
 # frame, root counter 1 (hblanks) and the vblank count at each call (with 3 frames of backtrace) until frame F ends.
 # Usage: tools/play/call_trace.sh SCENE F "FUNC ..." OUT.log

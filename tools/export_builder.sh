@@ -1,5 +1,5 @@
 #!/bin/bash
-# Refresh the public Sonic-CD-PS1-ISO-Builder (docs/28 phase 11) from this port: the prebuilt executable,
+# Refresh the public Sonic-CD-PS1-ISO-Builder (docs/ports/sonic-cd/28 phase 11) from this port: the prebuilt executable,
 # the build-time converters tools/build_assets.py runs, the RSDKv3 sources the host manifest tool compiles,
 # the psxpress MDEC decoder source (MPL 2.0: its modified source ships with the binary). No game data.
 # The executable must be a natural build (not `make BOOT=`): rebuild with `make` first.

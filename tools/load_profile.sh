@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load-time profile (docs/28 phase 9): every file-system CD request (PS1FsProfileHook: LBA, sectors, time),
+# Load-time profile (docs/ports/sonic-cd/28 phase 9): every file-system CD request (PS1FsProfileHook: LBA, sectors, time),
 # every fopen and every load end (PS1LoadingDoneHook), then per-load / per-file tables (load_profile.py,
 # from the Nexus port). The emulated CD timing is PCSX-Redux's model: compare request counts first.
 # Usage: tools/load_profile.sh OUT.log [STOP_FRAME=3] [--order ORDER.txt]   (build: e.g. make BOOT=R11A)

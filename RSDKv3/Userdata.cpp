@@ -96,7 +96,7 @@ bool useSGame = false;
 //#endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-// Memory card saves (docs/28 phase 8, ps1/memcard: Sony file name, CRC-checked header, never formats).
+// Memory card saves (docs/ports/sonic-cd/28 phase 8, ps1/memcard: Sony file name, CRC-checked header, never formats).
 // Sonic CD's scripts use save RAM well below index 1024 (save slots, options 32-39, time attack from 48:
 // round * 18 + ...): the file holds saveRAM[0..1023] (4 KB, one card block); the rest of the PS1 save RAM
 // is Stage Setup's per-stage scratch (Userdata.hpp). The card is read once, at the first ReadSaveRAM (the save select):
@@ -211,7 +211,7 @@ bool ReadSaveRAMData()
 #endif
 
 #if RETRO_PLATFORM == RETRO_PS1
-    // The save RAM lives on the memory card (docs/28 phase 8, PS1ReadSaveCard); never on the disc, which
+    // The save RAM lives on the memory card (docs/ports/sonic-cd/28 phase 8, PS1ReadSaveCard); never on the disc, which
     // may be streaming CD-XA music.
     return PS1ReadSaveCard();
 #endif
@@ -956,7 +956,7 @@ void WriteSettings()
 void ReadUserdata()
 {
 #if RETRO_PLATFORM == RETRO_PS1
-    return; // achievements / leaderboards stay in RAM (docs/28 phase 8); never the CD, which may be streaming music
+    return; // achievements / leaderboards stay in RAM (docs/ports/sonic-cd/28 phase 8); never the CD, which may be streaming music
 #endif
     char buffer[0x200];
 #if RETRO_USE_MOD_LOADER
@@ -1017,7 +1017,7 @@ void ReadUserdata()
 void WriteUserdata()
 {
 #if RETRO_PLATFORM == RETRO_PS1
-    return; // achievements / leaderboards stay in RAM (docs/28 phase 8); never the CD, which may be streaming music
+    return; // achievements / leaderboards stay in RAM (docs/ports/sonic-cd/28 phase 8); never the CD, which may be streaming music
 #endif
     char buffer[0x200];
 #if RETRO_USE_MOD_LOADER

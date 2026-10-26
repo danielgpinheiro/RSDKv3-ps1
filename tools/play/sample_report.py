@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report of a PC-sampler run (tools/play/scene_run.sh with SAMPLE=1; ps1/pc_sampler.cpp), docs/28 speed pass 2.
+"""Report of a PC-sampler run (tools/play/scene_run.sh with SAMPLE=1; ps1/pc_sampler.cpp), docs/ports/sonic-cd/28 speed pass 2.
 Usage: sample_report.py OUT_PREFIX FRAMES [--elf rsdkv3.elf] [--top N] [--period 9973] [--ops N] [--lines FUNC ...]
 Reads OUT_samples.bin ((EPC, script PC) word pairs), OUT_scripts.txt (OBJ lines), OUT_funcs.bin (scriptFunctionList),
 OUT_code.bin (scriptCode). Prints, in hblanks a frame (samples x period / 2152 / FRAMES):

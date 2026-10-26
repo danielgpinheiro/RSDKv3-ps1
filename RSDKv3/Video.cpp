@@ -2,7 +2,7 @@
 
 #if RETRO_PLATFORM == RETRO_PS1
 // PS1 port: no Theora at runtime. The .ogv videos become MDEC STR streams with both soundtracks' audio at
-// build time (tools/fmv/build_str.py) and play full screen through ps1/fmv.cpp (docs/28 phase 6).
+// build time (tools/fmv/build_str.py) and play full screen through ps1/fmv.cpp (docs/ports/sonic-cd/28 phase 6).
 #include "../ps1/fmv.hh"
 int currentVideoFrame = 0;
 int videoFrameCount   = 0;

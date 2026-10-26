@@ -124,12 +124,12 @@ static bool uploadBlock(FILE *f, uint32_t offset, int x, int y, int w, int h, ui
     return ok;
 }
 
-void PS1ReleaseClusterLists(); // ps1/render.cpp (docs/43 C6)
+void PS1ReleaseClusterLists(); // ps1/render.cpp (docs/perf/43 C6)
 bool PS1AtlasLoad(const char *folder, int player) {
     PS1ReleaseClusterLists();
     clearTables();
     char path[96];
-    // Per-player atlases (docs/28 3.2): <Stage>.atl = Sonic, <Stage>_t.atl = Tails.
+    // Per-player atlases (docs/ports/sonic-cd/28 3.2): <Stage>.atl = Sonic, <Stage>_t.atl = Tails.
     snprintf(path, sizeof(path), "Data/Sprites/Atlas/%s%s.atl", folder, player == 1 ? "_t" : "");
     FILE *f = fopen(path, "rb");
     if (!f) {

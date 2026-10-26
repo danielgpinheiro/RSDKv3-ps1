@@ -11,7 +11,7 @@
 // parallax line positions (DrawHLineScrollLayer / DrawVLineScrollLayer), the view globals
 // (InitRenderDevice), DrawObjectAnimation's dispatch.
 //
-// Phase 3.2 scope (docs/28): chain + clear + palette, atlas sprites (plain / flipped / scaled / rotated
+// Phase 3.2 scope (docs/ports/sonic-cd/28): chain + clear + palette, atlas sprites (plain / flipped / scaled / rotated
 // / rotozoom), HScroll tile layers. Not yet (counted in g_ps1DrawTodo): ink effects and tint (3.3),
 // per-line palette banks + water palette (3.4), VScroll / 3D layers / faces (3.5, 7), menu text (4).
 #include "sprite_quad.hh"
@@ -82,7 +82,7 @@ volatile uint32_t g_ps1ProfFloorsHbl  = 0; // this frame: every 3D floor / sky l
 volatile uint32_t g_ps1ProfLayer[5]   = {}; // this frame: FG (uniform) layers, per-line passes, tile bands, strip bands (hblanks), HScroll calls
 volatile uint32_t g_ps1ProfSlot[4]    = {}; // this frame: hblanks per draw slot (layerID 0-3)
 volatile uint32_t g_ps1TileFlipped    = 0; // this frame: tiles drawn as flipped / partial quads or sprites (slow path)
-volatile uint32_t g_ps1TileFlipRects  = 0; // flipped tiles drawn as flip-bit sprites (total, docs/43 G3)
+volatile uint32_t g_ps1TileFlipRects  = 0; // flipped tiles drawn as flip-bit sprites (total, docs/perf/43 G3)
 volatile uint32_t g_ps1AtlasDrawMiss  = 0; // sprite texels in no atlas cluster
 volatile int32_t g_ps1MissSheet = -1, g_ps1MissX = 0, g_ps1MissY = 0; // the last miss (atlas sheet, texel)
 volatile uint32_t g_ps1SheetUnbound   = 0; // draws from a sheet the stage atlas doesn't have
@@ -415,7 +415,7 @@ static PS1ClusterCacheEntry s_clusterCache[PS1_CLUSTER_CACHE];
 static int16_t s_sheetLast[PS1_ATLAS_MAX_SHEETS][PS1_SHEET_MRU];
 static uint8_t s_sheetLastPos[PS1_ATLAS_MAX_SHEETS];
 static int8_t s_sheetDisjoint[PS1_ATLAS_MAX_SHEETS]; // -1 unknown, 0 overlapping clusters, 1 disjoint
-// Texel -> cluster candidate lists (docs/43 C6): the Title's clouds and water strips look up ~320 texels a frame on its
+// Texel -> cluster candidate lists (docs/perf/43 C6): the Title's clouds and water strips look up ~320 texels a frame on its
 // 512 x 512 sheet; the 256-entry cache above misses ~64 of them, and each miss scanned the sheet's 49 clusters (~40 hblanks
 // a frame). A sheet that keeps missing gets, per 16 x 16-texel cell, the list of clusters touching the cell in scan order
 // (heap, freed with the cache): the first of them holding the texel is exactly what the scan returns (the others can't
@@ -638,7 +638,7 @@ template <typename Fn> static void PS1ForEachPieceAtlas(int sheet, int sheetID, 
 
 static inline bool PS1ObjectsHidden() { return (g_ps1DebugDrawMask & 1) != 0; }
 
-// Flip-bit rectangles (PS1DetectGpu below, docs/43 G3): s_flipRects = the GPU draws them (type 1 / 2 and the readback).
+// Flip-bit rectangles (PS1DetectGpu below, docs/perf/43 G3): s_flipRects = the GPU draws them (type 1 / 2 and the readback).
 // g_ps1GpuType: psx-spx's GPU version (0 old, 1 unknown, 2 new), g_ps1GpuQuery7 the raw GP1(10h) index 7 answer,
 // g_ps1FlipTest the readback word (0 = not tested: type 0).
 static bool s_flipRects = false;
@@ -685,7 +685,7 @@ static void PS1ChainPieceSprite(const PS1Piece &p, int x, int y)
     g_ps1DrawSprites = g_ps1DrawSprites + 1;
 }
 
-// A 1:1 mirrored piece as a flip rectangle (docs/43 G3, CD-094): PS1ChainPieceSprite's sprite from texcoord (tu, tv)
+// A 1:1 mirrored piece as a flip rectangle (docs/perf/43 G3, CD-094): PS1ChainPieceSprite's sprite from texcoord (tu, tv)
 // (PS1FlipRectTex) under the piece's texpage with GP0(E1h) bit 12 (X) / 13 (Y) (dir = RSDK FLIP_X 1 | FLIP_Y 2).
 // PS1ChainTPage dedupes on the whole texpage, so the next unflipped piece sends its own; a quad in between invalidates
 // it. Out of line: the unflipped sprite path stays as it was.
@@ -773,7 +773,7 @@ static void PS1ChainPieceRect(const PS1Piece &p, int x, int y, int w, int h, boo
 volatile uint32_t g_ps1GpuClipped = 0; // primitives clipped to the screen because they were beyond the limits
 volatile uint32_t g_ps1GpuLimit   = 0; // primitives still beyond the limits (drawn as they are: GDB check)
 
-volatile uint32_t g_ps1FaceOffscreen = 0; // textured faces wholly off screen, not chained (docs/43 G6)
+volatile uint32_t g_ps1FaceOffscreen = 0; // textured faces wholly off screen, not chained (docs/perf/43 G6)
 volatile uint32_t g_ps1GpuLimitOnScreen = 0; // textured faces beyond the GPU limits whose box reaches the screen (G6)
 static bool PS1BeyondGpuLimits(int x0, int y0, int x1, int y1)
 {
@@ -1145,7 +1145,7 @@ void PS1Copy16x16Tile(int dest, int src)
 static psyqo::PrimPieces::TPageAttr s_tileTPage[4];
 static uint32_t s_tileClutWord = 0;
 
-// Texture flip bits (docs/43 G3; nocash psx-spx "GPU Render Rectangle Commands" / "GPU Versions"): GP0(E1h) bits 12-13
+// Texture flip bits (docs/perf/43 G3; nocash psx-spx "GPU Render Rectangle Commands" / "GPU Versions"): GP0(E1h) bits 12-13
 // mirror rectangles on every GPU but the old 160-pin CXD8514Q (PU-7 / EARLY-PU-8 boards; every PSone has them), which is
 // why flipped tiles were 9-word textured quads (~3x a rectangle's GPU time, "GPU Rendering Timings"). Emulators differ
 // (PCSX-Redux and DuckStation before 2026-10-16 ignore the bits; DuckStation b9b8366 draws them). The GPU type comes first
@@ -1339,7 +1339,7 @@ static int PS1TileQuadWords(uint32_t *w, int sx, int sy, int tileIndex, int ty0,
 // overlap, so they are grouped: whole unflipped tiles per texture page (texpage + bulk 16x16 sprites),
 // then flipped / partial tiles as raw quads (each carries its texpage).
 static void PS1ChainFlipTiles(const uint32_t *f, int n, int sy, int ty0, int h);
-// FLIP (docs/43 G3): flipped tiles recorded for PS1ChainFlipTiles' flip rects (new GPU); else textured quads written in
+// FLIP (docs/perf/43 G3): flipped tiles recorded for PS1ChainFlipTiles' flip rects (new GPU); else textured quads written in
 // the loop, as before (two instances: the quad path keeps its registers).
 template <bool FLIP>
 static void PS1DrawTileBandT(const TileLayer *layer, byte above, int sy, int h, int ly, int chunkX, int fullW)
@@ -1435,7 +1435,7 @@ static void PS1DrawTileBand(const TileLayer *layer, byte above, int sy, int h, i
         PS1DrawTileBandT<false>(layer, above, sy, h, ly, chunkX, fullW);
 }
 // PS1DrawTileBand's flipped tiles (n entries x | tile index << 16 | dir << 28, rows [ty0, ty0 + h) at screen line sy):
-// as flip rects (docs/43 G3): per tile page and direction the page's texpage with the flip bits, then the sprites (16 x 16,
+// as flip rects (docs/perf/43 G3): per tile page and direction the page's texpage with the flip bits, then the sprites (16 x 16,
 // or variable for a partial band) with the texcoords of their first texel (u + 15 for an X flip, v + 15 - ty0 for a Y flip).
 static __attribute__((noinline)) void PS1ChainFlipTiles(const uint32_t *f, int n, int sy, int ty0, int h)
 {
@@ -2314,10 +2314,10 @@ void DrawTexturedFace(void *v, byte sheetID)
         }
         if (PS1BeyondGpuLimits(x0, y0, x1, y1)) {
             g_ps1GpuLimit = g_ps1GpuLimit + 1;
-            if (x1 >= 0 && x0 < SCREEN_XSIZE && y1 >= 0 && y0 < SCREEN_YSIZE) // docs/43 G6: does it reach the screen?
+            if (x1 >= 0 && x0 < SCREEN_XSIZE && y1 >= 0 && y0 < SCREEN_YSIZE) // docs/perf/43 G6: does it reach the screen?
                 g_ps1GpuLimitOnScreen = g_ps1GpuLimitOnScreen + 1;
         }
-        // docs/43 G6 / C6: a face wholly off the screen draws no pixel (the GPU clips to the drawing area; beyond the
+        // docs/perf/43 G6 / C6: a face wholly off the screen draws no pixel (the GPU clips to the drawing area; beyond the
         // limits it drops it): no lookup, no primitive (the Title's ~15 a frame beyond the limits were all off screen)
         if (x1 < 0 || x0 >= SCREEN_XSIZE || y1 < 0 || y0 >= SCREEN_YSIZE) {
             g_ps1FaceOffscreen = g_ps1FaceOffscreen + 1;
@@ -2471,7 +2471,7 @@ void DrawBitmapText(void *menu, int XPos, int YPos, int scale, int spacing, int 
 void DrawTextMenu(void *menu, int XPos, int YPos) { g_ps1DrawTodo = g_ps1DrawTodo + 1; }
 
 // ---------------------------------------------------------------------------------------------------
-// 3D floor (docs/28 phase 7): the special stages' floor, upstream Draw3DFloorLayer / Draw3DSkyLayer (the sky
+// 3D floor (docs/ports/sonic-cd/28 phase 7): the special stages' floor, upstream Draw3DFloorLayer / Draw3DSkyLayer (the sky
 // variant is the same floor at the PC's double resolution). Upstream walks the floor per screen row y =
 // 128 + i (i = 4..111): the row sees the floor at forward distance f = K / i (K = YPos * 3 / 2048, px) and
 // steps f / 192 floor px per screen pixel along (-cos, sin). So a floor point at forward f and lateral l

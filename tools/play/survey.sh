@@ -1,5 +1,5 @@
 #!/bin/bash
-# Speed survey (docs/28 speed pass 2): for each scene, a BOOT= build and a scripted run (tools/play/scene_run.sh),
+# Speed survey (docs/ports/sonic-cd/28 speed pass 2): for each scene, a BOOT= build and a scripted run (tools/play/scene_run.sh),
 # frames FROM..TO; prints / appends "RUN ..." lines to OUT/survey.txt. With SNAP=1 the EXE + ELF of each scene are kept
 # in OUT/snap/ (the A/B reference: NOBUILD=1 EXE=... ELF=...). Pad scripts: pad_for SCENE.
 # Usage: tools/play/survey.sh OUT SCENE[:BOOT_ID]...   (FROM=300 TO=1200; CHECK=frames; EMU=ds; GPU=frames;

@@ -215,7 +215,7 @@ void TransformVertexBuffer()
         return;
 
 #if RETRO_PLATFORM == RETRO_PS1
-    // A rotation about the X axis (the Title's clouds, docs/28 speed pass 2) has four zero factors: their terms,
+    // A rotation about the X axis (the Title's clouds, docs/ports/sonic-cd/28 speed pass 2) has four zero factors: their terms,
     // (v * 0) >> 8, are 0 and are left out (the same sums, 5 multiplies a vertex instead of 9).
     const int(*m)[4] = matFinal.values;
     if (!m[0][1] && !m[0][2] && !m[1][0] && !m[2][0]) {
@@ -295,7 +295,7 @@ void Sort3DDrawList()
 #if RETRO_PLATFORM == RETRO_PS1
     // PS1: the bubble sort below is stable and descending, so any stable descending sort gives the
     // same order; a bottom-up merge sort does Sonic CD's title (160 faces) in ~1,200 compares instead
-    // of ~12,700 (the bubble sort took 235 hblanks = 0.9 frame, docs/28 phase 2.3). Identical order
+    // of ~12,700 (the bubble sort took 235 hblanks = 0.9 frame, docs/ports/sonic-cd/28 phase 2.3). Identical order
     // checked on the host: tools/scene3d/sort3d_check.sh.
     PS1SortDrawList3D(drawList3D, faceCount);
     return;

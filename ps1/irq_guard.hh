@@ -1,5 +1,5 @@
 /*
- * Lost-IRQ guard (the FMV hang on the PSone, docs/28 "Real hardware: FMV").
+ * Lost-IRQ guard (the FMV hang on the PSone, docs/ports/sonic-cd/28 "Real hardware: FMV").
  *
  * I_STAT bits are edge-triggered and are acknowledged by writing 0 to that bit alone (psx-spx
  * interrupts.md "Interrupt Acknowledge"). psyqo acknowledges with a read-modify-write

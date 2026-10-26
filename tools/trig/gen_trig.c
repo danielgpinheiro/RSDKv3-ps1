@@ -1,5 +1,5 @@
 /*
- * Build-time trig tables for the RSDKv3 PS1 port (docs/28 phase 2.2).
+ * Build-time trig tables for the RSDKv3 PS1 port (docs/ports/sonic-cd/28 phase 2.2).
  *
  * RSDKv3's CalculateTrigAngles (RSDKv3/Math.cpp) fills sin/cos tables and a 64 KB atan table with
  * 65,536 atan2f calls at boot: ~26 s on the R3000A (no FPU, soft-float). This host program runs

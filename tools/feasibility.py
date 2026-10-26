@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sonic CD PS1 feasibility report (docs/28 phase 1): SPU RAM, disc size, script/stage RAM.
+"""Sonic CD PS1 feasibility report (docs/ports/sonic-cd/28 phase 1): SPU RAM, disc size, script/stage RAM.
 
 (VRAM for sprites: tools/atlas/build_atlas.py DATA MANIFESTS --report.)
 

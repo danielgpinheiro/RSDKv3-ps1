@@ -1,5 +1,5 @@
 #!/bin/bash
-# A scene's scripted run, timed (docs/28 speed pass 2): builds `make BOOT=SCENE [BOOT_ID=ID]` (SAMPLE=1 with SAMPLE=1),
+# A scene's scripted run, timed (docs/ports/sonic-cd/28 speed pass 2): builds `make BOOT=SCENE [BOOT_ID=ID]` (SAMPLE=1 with SAMPLE=1),
 # boots it on the harness emulator (tools/redux_env.sh: the stock PCSX-Redux app, 2 MB / 1 MB VRAM, muted), plays the pad
 # script and reports engine frames FROM..TO-1: CPU hblanks a frame (avg / worst; 262 = one 60 Hz frame) and vsyncs a
 # frame (avg / worst; 1.00 = 60 fps). Prints "RUN scene avgHbl maxHbl avgVbl maxVbl over frames" and guards.
@@ -17,7 +17,7 @@
 #   NOBUILD=1             run the EXE as it is (an A/B snapshot: EXE=path ELF=path)
 #   EMU=ds                DuckStation (retail BIOS; only when no other session runs it): timing only
 #   GPU="f1 f2 ..."       at these frames dump RAM + the frame's chain head and price the chain with
-#                         tools/play/gpu_cost.py (docs/43: DuckStation's GPU model) -> OUT_gpu_F.ram / .txt, "GPUCOST" lines
+#                         tools/play/gpu_cost.py (docs/perf/43: DuckStation's GPU model) -> OUT_gpu_F.ram / .txt, "GPUCOST" lines
 #   PERF_SPLIT=1          build with the frame-split counters (make PERF_SPLIT=1): "SPLIT" line = GPU tail (GPU still
 #                         drawing the previous chain after the CPU's work; only DuckStation models it), flip gap, and the
 #                         section averages (objects, draw, object draw, floors, FG, per-line, tile bands, strips, 3D

@@ -1,5 +1,5 @@
 #!/bin/bash
-# PC-sampler profile of a scene's scripted run (docs/28 speed pass 2): SAMPLE=1 BOOT= build of the working tree, the
+# PC-sampler profile of a scene's scripted run (docs/ports/sonic-cd/28 speed pass 2): SAMPLE=1 BOOT= build of the working tree, the
 # survey's pad script, frames FROM..TO; the report (tools/play/sample_report.py) goes to OUT.report.txt, read at once
 # (it maps through the ELF just built). Usage: tools/play/sample_scene.sh OUT SCENE[:BOOT_ID] [FROM TO] [report args]
 set -u
